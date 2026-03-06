@@ -1000,7 +1000,7 @@ fn test_recover_stranded_funds_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1008)")]
+#[should_panic(expected = "Error(Contract, #405)")]
 fn test_recover_stranded_funds_zero_amount() {
     let (env, client, _, admin) = setup_test_env();
     let recipient = Address::generate(&env);

@@ -62,7 +62,6 @@ pub enum Error {
     InsufficientPrepaidBalance = 1005,
     InvalidAmount = 1006,
     Replay = 1007,
-    MerchantPaused = 1008,
     EmergencyStopActive = 1009,
     Underflow = 1010,
     RecoveryNotAllowed = 1011,
@@ -79,6 +78,7 @@ pub enum Error {
     RateLimitExceeded = 1020,
     InvalidFeeBps = 1021,
     TreasuryNotConfigured = 1022,
+    MerchantPaused = 1023,
 }
 
 impl Error {
