@@ -44,6 +44,7 @@ use soroban_sdk::{Env, Symbol};
 ///
 /// When created, it sets a lock in storage. When dropped, it clears the lock.
 /// If a lock already exists, creation fails with `Error::Reentrancy`.
+#[allow(dead_code)]
 pub struct ReentrancyGuard {
     lock_key: Symbol,
     env: *const Env,
