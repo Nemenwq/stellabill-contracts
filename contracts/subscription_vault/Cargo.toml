@@ -7,6 +7,10 @@ description = "Stellarbill prepaid subscription vault - recurring USDC billing o
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = ["oracle-pricing"]
+oracle-pricing = []
+
 [dependencies]
 soroban-sdk = "22.0.0"
 

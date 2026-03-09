@@ -1,10 +1,10 @@
 use crate::{
     can_transition, compute_next_charge_info, get_allowed_transitions, validate_status_transition,
-    Error, RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault,
+    Error, OraclePrice, RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault,
     SubscriptionVaultClient, MAX_SUBSCRIPTION_ID,
 };
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, Vec as SorobanVec};
+use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec as SorobanVec};
 
 // ── constants ─────────────────────────────────────────────────────────────────
 const T0: u64 = 1_000;
@@ -96,6 +96,28 @@ fn seed_counter(env: &Env, contract_id: &Address, value: u32) {
             .instance()
             .set(&soroban_sdk::Symbol::new(env, "next_id"), &value);
     });
+}
+
+#[contract]
+struct MockOracle;
+
+#[contractimpl]
+impl MockOracle {
+    pub fn set_price(env: Env, price: i128, timestamp: u64) {
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "price"), &OraclePrice { price, timestamp });
+    }
+
+    pub fn latest_price(env: Env) -> OraclePrice {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "price"))
+            .unwrap_or(OraclePrice {
+                price: 0,
+                timestamp: 0,
+            })
+    }
 }
 
 // ── State Machine Helper Tests ─────────────────────────────────────────────────
@@ -2116,4 +2138,66 @@ fn test_compaction_no_rows_and_override_value() {
     assert_eq!(summary.pruned_count, 0);
     assert_eq!(summary.kept_count, 0);
     assert_eq!(summary.total_pruned_amount, 0);
+}
+
+#[test]
+fn test_oracle_enabled_charge_uses_quote_conversion() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(T0);
+    let (client, token, admin) = setup_contract(&env);
+    let oracle_id = env.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&2_000_000i128, &T0); // 2 quote units/token with 6 decimals
+
+    // Enable oracle pricing with non-stale quote.
+    client.set_oracle_config(&admin, &true, &Some(oracle_id.clone()), &(60 * 24 * 60 * 60));
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &2_000_000_000i128);
+
+    // 20 quote units (6 decimals). At price 2 quote/token, charge should be 10 tokens.
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &20_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &100_000_000i128);
+
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&id);
+
+    assert_eq!(client.get_merchant_balance(&merchant), 10_000_000i128);
+}
+
+#[test]
+fn test_oracle_stale_quote_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    let (client, token, admin) = setup_contract(&env);
+    let oracle_id = env.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&2_000_000i128, &T0); // stale vs max_age=1
+    client.set_oracle_config(&admin, &true, &Some(oracle_id.clone()), &1u64);
+
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &2_000_000_000i128);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &20_000_000i128,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&id, &subscriber, &100_000_000i128);
+
+    let result = client.try_charge_subscription(&id);
+    assert_eq!(result, Err(Ok(Error::OraclePriceStale)));
 }

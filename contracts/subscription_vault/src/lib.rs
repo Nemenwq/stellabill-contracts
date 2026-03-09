@@ -11,6 +11,7 @@
 mod admin;
 mod charge_core;
 mod merchant;
+mod oracle;
 mod queries;
 mod reentrancy;
 pub mod safe_math;
@@ -30,9 +31,9 @@ pub use types::{
     BillingStatementsPage, CapInfo, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent,
     MerchantWithdrawalEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, PlanTemplate,
-    RecoveryEvent, RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargedEvent,
-    SubscriptionCreatedEvent, SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus,
-    SubscriptionSummary,
+    OracleConfig, OraclePrice, RecoveryEvent, RecoveryReason, Subscription, SubscriptionCancelledEvent,
+    SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionPausedEvent,
+    SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -632,6 +633,23 @@ impl SubscriptionVault {
             },
         );
         Ok(summary)
+    }
+
+    /// Configure optional price oracle for cross-currency pricing. Admin only.
+    pub fn set_oracle_config(
+        env: Env,
+        admin: Address,
+        enabled: bool,
+        oracle: Option<Address>,
+        max_age_seconds: u64,
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        oracle::set_oracle_config(&env, enabled, oracle, max_age_seconds)
+    }
+
+    /// Read the currently configured oracle integration settings.
+    pub fn get_oracle_config(env: Env) -> OracleConfig {
+        oracle::get_oracle_config(&env)
     }
 }
 

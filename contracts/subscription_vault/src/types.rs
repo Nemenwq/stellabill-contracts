@@ -111,6 +111,14 @@ pub enum Error {
     LifetimeCapReached = 1017,
     /// Contract is already initialized; init may only be called once.
     AlreadyInitialized = 1018,
+    /// Oracle pricing is enabled but no oracle is configured.
+    OracleNotConfigured = 1019,
+    /// Oracle returned an invalid or missing price payload.
+    OraclePriceUnavailable = 1020,
+    /// Oracle price is stale relative to configured max age.
+    OraclePriceStale = 1021,
+    /// Oracle returned a non-positive price.
+    OraclePriceInvalid = 1022,
     /// The contract has allocated the maximum number of subscriptions.
     SubscriptionLimitReached = 429,
 }
@@ -142,6 +150,10 @@ impl Error {
             Error::Reentrancy => 1016,
             Error::LifetimeCapReached => 1017,
             Error::AlreadyInitialized => 1018,
+            Error::OracleNotConfigured => 1019,
+            Error::OraclePriceUnavailable => 1020,
+            Error::OraclePriceStale => 1021,
+            Error::OraclePriceInvalid => 1022,
             Error::SubscriptionLimitReached => 429,
         }
     }
@@ -401,6 +413,26 @@ pub struct BillingCompactedEvent {
     pub pruned_count: u32,
     pub kept_count: u32,
     pub total_pruned_amount: i128,
+    pub timestamp: u64,
+}
+
+/// Optional oracle pricing configuration for cross-currency plans.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleConfig {
+    pub enabled: bool,
+    pub oracle: Option<Address>,
+    /// Maximum acceptable price age in seconds.
+    pub max_age_seconds: u64,
+}
+
+/// Price payload returned by oracle contract view methods.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePrice {
+    /// Quote units per 1 token.
+    pub price: i128,
+    /// Timestamp when quote was published by oracle.
     pub timestamp: u64,
 }
 

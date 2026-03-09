@@ -81,6 +81,7 @@ pub fn charge_one(
     idempotency_key: Option<soroban_sdk::BytesN<32>>,
 ) -> Result<(), Error> {
     let mut sub = get_subscription(env, subscription_id)?;
+    let charge_amount = crate::oracle::resolve_charge_amount(env, &sub)?;
 
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::GracePeriod {
         return Err(Error::NotActive);
@@ -129,7 +130,7 @@ pub fn charge_one(
     if let Some(cap) = sub.lifetime_cap {
         let remaining = cap.checked_sub(sub.lifetime_charged).unwrap_or(0).max(0);
 
-        if remaining == 0 || sub.amount > remaining {
+        if remaining == 0 || charge_amount > remaining {
             // Cap already exhausted or this charge would exceed it — cancel.
             validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
             sub.status = SubscriptionStatus::Cancelled;
@@ -154,16 +155,16 @@ pub fn charge_one(
 
     let storage = env.storage().instance();
 
-    match safe_sub_balance(sub.prepaid_balance, sub.amount) {
+    match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
-            crate::merchant::credit_merchant_balance(env, &sub.merchant, sub.amount)?;
+            crate::merchant::credit_merchant_balance(env, &sub.merchant, charge_amount)?;
             sub.last_payment_timestamp = now;
 
             // Accumulate lifetime charged amount
             sub.lifetime_charged = sub
                 .lifetime_charged
-                .checked_add(sub.amount)
+                .checked_add(charge_amount)
                 .ok_or(Error::Overflow)?;
 
             // Recover from grace period on successful charge
@@ -187,7 +188,7 @@ pub fn charge_one(
             append_statement(
                 env,
                 subscription_id,
-                sub.amount,
+                charge_amount,
                 sub.merchant.clone(),
                 BillingChargeKind::Interval,
                 next_allowed.saturating_sub(sub.interval_seconds),
@@ -206,7 +207,7 @@ pub fn charge_one(
                 SubscriptionChargedEvent {
                     subscription_id,
                     merchant: sub.merchant.clone(),
-                    amount: sub.amount,
+                    amount: charge_amount,
                     lifetime_charged: sub.lifetime_charged,
                 },
             );
