@@ -569,6 +569,21 @@ impl SubscriptionVault {
         subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
     }
 
+    /// Process a partial refund against a subscription's remaining prepaid balance.
+    ///
+    /// Only the contract admin may authorize partial refunds. The refunded amount
+    /// is debited from the subscription's `prepaid_balance` and transferred back
+    /// to the subscriber, following the same CEI pattern as other token flows.
+    pub fn partial_refund(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+        subscriber: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        subscription::do_partial_refund(&env, admin, subscription_id, subscriber, amount)
+    }
+
     /// Pause subscription (no charges until resumed). Allowed from Active.
     pub fn pause_subscription(
         env: Env,

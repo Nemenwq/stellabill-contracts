@@ -26,8 +26,8 @@ use crate::safe_math::{safe_add_balance, validate_non_negative};
 use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, PlanTemplate, PlanTemplateUpdatedEvent, Subscription,
-    SubscriptionMigratedEvent, SubscriptionStatus,
+    BillingChargeKind, DataKey, Error, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    Subscription, SubscriptionMigratedEvent, SubscriptionStatus,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -484,6 +484,55 @@ pub fn do_withdraw_subscriber_funds(
             &amount_to_refund,
         );
     }
+
+    Ok(())
+}
+
+pub fn do_partial_refund(
+    env: &Env,
+    admin: Address,
+    subscription_id: u32,
+    subscriber: Address,
+    amount: i128,
+) -> Result<(), Error> {
+    super::require_admin_auth(env, &admin)?;
+
+    subscriber.require_auth();
+
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    let mut sub = get_subscription(env, subscription_id)?;
+
+    if subscriber != sub.subscriber {
+        return Err(Error::Forbidden);
+    }
+
+    if amount > sub.prepaid_balance {
+        return Err(Error::InsufficientBalance);
+    }
+
+    // Effects: update internal state before performing external token transfer.
+    sub.prepaid_balance = sub
+        .prepaid_balance
+        .checked_sub(amount)
+        .ok_or(Error::Overflow)?;
+    env.storage().instance().set(&subscription_id, &sub);
+
+    // Interactions: transfer refund amount from contract to subscriber.
+    let token_addr = sub.token.clone();
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+    token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
+
+    env.events().publish(
+        (Symbol::new(env, "partial_refund"), subscription_id),
+        PartialRefundEvent {
+            subscription_id,
+            subscriber,
+            amount,
+        },
+    );
 
     Ok(())
 }

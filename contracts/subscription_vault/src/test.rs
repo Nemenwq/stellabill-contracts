@@ -1798,6 +1798,113 @@ fn test_get_subscriber_credit_limit_and_exposure_views() {
 }
 
 #[test]
+fn test_partial_refund_debits_prepaid_and_transfers_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token_contract = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::Client::new(&env, &token_contract);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_contract);
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let vault_admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.init(
+        &token_contract,
+        &6,
+        &vault_admin,
+        &1_000_000i128,
+        &(7 * 24 * 60 * 60),
+    );
+
+    // Seed subscriber with tokens and create a funded subscription.
+    token_admin.mint(&subscriber, &50_000_000i128);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
+
+    let balance_before = token.balance(&subscriber);
+    let sub_before = client.get_subscription(&sub_id);
+    assert_eq!(sub_before.prepaid_balance, 20_000_000i128);
+
+    // Perform a partial refund of half the prepaid balance.
+    client.partial_refund(&vault_admin, &sub_id, &subscriber, &10_000_000i128);
+
+    let balance_after = token.balance(&subscriber);
+    let sub_after = client.get_subscription(&sub_id);
+
+    assert_eq!(sub_after.prepaid_balance, 10_000_000i128);
+    assert_eq!(balance_after, balance_before + 10_000_000i128);
+}
+
+#[test]
+fn test_partial_refund_rejects_invalid_amounts_and_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token_contract = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_contract);
+
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let vault_admin = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.init(
+        &token_contract,
+        &6,
+        &vault_admin,
+        &1_000_000i128,
+        &(7 * 24 * 60 * 60),
+    );
+
+    token_admin.mint(&subscriber, &50_000_000i128);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    client.deposit_funds(&sub_id, &subscriber, &5_000_000i128);
+
+    // Zero or negative refund amounts are rejected.
+    let zero_res = client.try_partial_refund(&vault_admin, &sub_id, &subscriber, &0i128);
+    assert_eq!(zero_res, Err(Ok(Error::InvalidAmount)));
+
+    let negative_res = client.try_partial_refund(&vault_admin, &sub_id, &subscriber, &-1i128);
+    assert_eq!(negative_res, Err(Ok(Error::InvalidAmount)));
+
+    // Refund exceeding prepaid balance is rejected.
+    let over_res = client.try_partial_refund(&vault_admin, &sub_id, &subscriber, &10_000_000i128);
+    assert_eq!(over_res, Err(Ok(Error::InsufficientBalance)));
+
+    // Non-admin cannot authorize partial refunds.
+    let other_admin = Address::generate(&env);
+    let unauth_res = client.try_partial_refund(&other_admin, &sub_id, &subscriber, &1_000_000i128);
+    assert_eq!(unauth_res, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 fn test_update_plan_template_creates_new_version_and_preserves_old() {
     let env = Env::default();
     env.mock_all_auths();

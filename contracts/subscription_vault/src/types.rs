@@ -628,3 +628,15 @@ pub struct SubscriptionMigratedEvent {
     /// Timestamp when the migration occurred.
     pub timestamp: u64,
 }
+
+/// Event emitted when a partial refund is processed for a subscription.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PartialRefundEvent {
+    /// Subscription receiving the refund.
+    pub subscription_id: u32,
+    /// Subscriber who receives the refunded amount.
+    pub subscriber: Address,
+    /// Amount refunded in token base units.
+    pub amount: i128,
+}
