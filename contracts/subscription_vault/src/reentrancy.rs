@@ -109,8 +109,6 @@ pub fn is_reentrancy_supported() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // NOTE: Reentrancy guard tests would require environment setup.
     // See test.rs for integration tests that verify guard behavior in actual contract contexts.
 }

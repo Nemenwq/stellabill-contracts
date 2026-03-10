@@ -36,6 +36,9 @@ pub enum DataKey {
     IdemKey(u32),
     /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
     EmergencyStop,
+    BillingStatement(u32, u32),
+    BillingStatementsBySubscription(u32),
+    BillingStatementsByMerchant(Address),
 }
 
 /// Represents the lifecycle state of a subscription.
