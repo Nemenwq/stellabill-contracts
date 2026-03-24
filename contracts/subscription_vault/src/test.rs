@@ -2518,9 +2518,7 @@ mod storage_layout {
         };
 
         env.as_contract(&contract_id, || {
-            env.storage()
-                .instance()
-                .set(&DataKey::Sub(42), &original);
+            env.storage().instance().set(&DataKey::Sub(42), &original);
             let loaded: Subscription = env
                 .storage()
                 .instance()
@@ -2684,8 +2682,11 @@ mod storage_layout {
             for (i, status) in statuses.iter().enumerate() {
                 let key = DataKey::Sub(i as u32);
                 env.storage().instance().set(&key, status);
-                let loaded: SubscriptionStatus =
-                    env.storage().instance().get(&key).expect("status must be present");
+                let loaded: SubscriptionStatus = env
+                    .storage()
+                    .instance()
+                    .get(&key)
+                    .expect("status must be present");
                 assert_eq!(&loaded, status);
             }
         });
