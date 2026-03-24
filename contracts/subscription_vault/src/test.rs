@@ -2397,3 +2397,102 @@ fn test_create_subscription_with_unaccepted_token_fails() {
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
+
+
+// --- EVENT INDEXER FIXTURE PACK (#204) ---
+use soroban_sdk::IntoVal;
+use crate::types::{
+    SubscriptionCreatedEvent, 
+    EmergencyStopEnabledEvent, 
+    MetadataSetEvent
+};
+
+#[test]
+fn fixture_indexer_payload_abi_stability() {
+    let env = soroban_sdk::Env::default();
+    let subscriber = soroban_sdk::Address::generate(&env);
+    let merchant = soroban_sdk::Address::generate(&env);
+
+    // 1. Verify SubscriptionCreatedEvent ABI Stability
+    let created = crate::types::SubscriptionCreatedEvent {
+        subscription_id: 42,
+        subscriber: subscriber.clone(),
+        merchant: merchant.clone(),
+        amount: 1000,
+        interval_seconds: 2592000,
+        lifetime_cap: None,
+    };
+    // Simulate the blockchain emitting the raw ScVal
+    let created_val: soroban_sdk::Val = soroban_sdk::IntoVal::into_val(&created, &env);
+    // Simulate the Indexer parsing the ScVal back into the struct
+    let parsed_created: crate::types::SubscriptionCreatedEvent = 
+        soroban_sdk::TryFromVal::try_from_val(&env, &created_val).unwrap();
+    
+    assert_eq!(parsed_created.subscription_id, 42);
+    assert_eq!(parsed_created.subscriber, subscriber);
+
+    // 2. Verify FundsDepositedEvent ABI Stability
+    let deposited = crate::types::FundsDepositedEvent {
+        subscription_id: 42,
+        subscriber: subscriber.clone(),
+        amount: 5000,
+    };
+    let deposited_val: soroban_sdk::Val = soroban_sdk::IntoVal::into_val(&deposited, &env);
+    let parsed_deposited: crate::types::FundsDepositedEvent = 
+        soroban_sdk::TryFromVal::try_from_val(&env, &deposited_val).unwrap();
+    
+    assert_eq!(parsed_deposited.amount, 5000);
+
+    // 3. Verify SubscriptionChargedEvent ABI Stability
+    let charged = crate::types::SubscriptionChargedEvent {
+        subscription_id: 42,
+        merchant: merchant.clone(),
+        amount: 1000,
+        lifetime_charged: 2000,
+    };
+    let charged_val: soroban_sdk::Val = soroban_sdk::IntoVal::into_val(&charged, &env);
+    let parsed_charged: crate::types::SubscriptionChargedEvent = 
+        soroban_sdk::TryFromVal::try_from_val(&env, &charged_val).unwrap();
+    
+    assert_eq!(parsed_charged.lifetime_charged, 2000);
+}
+
+#[test]
+fn fixture_admin_emergency_stop_pathway() {
+    let (env, client, _token, admin) = setup_test_env();
+    
+    // 1. Trigger Emergency Stop using the exact function from lib.rs
+    client.enable_emergency_stop(&admin);
+
+    // 2. Capture the event stream
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    
+    // 3. Validate payload completeness
+    let em_stop_payload: EmergencyStopEnabledEvent = last_event.2.into_val(&env);
+    assert_eq!(em_stop_payload.admin, admin);
+}
+
+#[test]
+fn fixture_metadata_edge_cases() {
+    let (env, client, _token, _admin) = setup_test_env();
+    
+    // create_test_subscription returns (sub_id, subscriber, merchant)
+    let (sub_id, subscriber, _merchant) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
+
+    // Setup Strings
+    let key = soroban_sdk::String::from_str(&env, "indexer_test_key");
+    let value = soroban_sdk::String::from_str(&env, "fixture_value");
+    
+    // Trigger set_metadata with the required 'authorizer' parameter
+    client.set_metadata(&sub_id, &subscriber, &key, &value);
+
+    // Capture and validate
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    
+    let meta_payload: MetadataSetEvent = last_event.2.into_val(&env);
+    assert_eq!(meta_payload.subscription_id, sub_id);
+    assert_eq!(meta_payload.key, key);
+    assert_eq!(meta_payload.authorizer, subscriber);
+}
