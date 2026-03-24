@@ -1514,18 +1514,45 @@ fn test_cancel_from_various_states() {
     let merchant = Address::generate(&env);
 
     // Cancel from Active
-    let id1 = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let id1 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
     client.cancel_subscription(&id1, &subscriber);
-    assert_eq!(client.get_subscription(&id1).status, SubscriptionStatus::Cancelled);
+    assert_eq!(
+        client.get_subscription(&id1).status,
+        SubscriptionStatus::Cancelled
+    );
 
     // Cancel from Paused
-    let id2 = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let id2 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
     client.pause_subscription(&id2, &subscriber);
     client.cancel_subscription(&id2, &subscriber);
-    assert_eq!(client.get_subscription(&id2).status, SubscriptionStatus::Cancelled);
+    assert_eq!(
+        client.get_subscription(&id2).status,
+        SubscriptionStatus::Cancelled
+    );
 
     // Cancel from InsufficientBalance
-    let id3 = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let id3 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
     // We can't easily trigger InsufficientBalance without a charge attempt, but we can mock it if needed.
     // For now, let's just test that the state machine allows it.
 }
@@ -1538,7 +1565,14 @@ fn test_withdraw_subscriber_funds_exactly_once() {
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &10_000_000);
 
-    let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
     client.deposit_funds(&id, &subscriber, &5_000_000);
 
     client.cancel_subscription(&id, &subscriber);
@@ -1558,7 +1592,14 @@ fn test_withdraw_zero_balance_fails() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
     // No deposit
     client.cancel_subscription(&id, &subscriber);
 
@@ -1574,7 +1615,14 @@ fn test_cancel_and_withdraw_events() {
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&subscriber, &10_000_000);
 
-    let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
     client.deposit_funds(&id, &subscriber, &5_000_000);
 
     client.cancel_subscription(&id, &subscriber);
