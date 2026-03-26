@@ -13,8 +13,12 @@
 //! See `docs/reentrancy.md` for details on the reentrancy threat model and mitigation.
 
 use crate::safe_math::{safe_sub_balance, validate_non_negative};
-use crate::types::{Error, MerchantConfig, MerchantWithdrawalEvent};
-use soroban_sdk::{token, Address, Env, Symbol};
+use crate::types::{
+    AccruedTotals, DataKey, Error, MerchantConfig, MerchantPausedEvent, MerchantRefundEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+    BillingChargeKind,
+};
+use soroban_sdk::{token, Address, Env, Symbol, Vec};
 
 pub fn get_merchant_paused(env: &Env, merchant: Address) -> bool {
     // Check both legacy Pause state and new Config state if they overlap
@@ -246,6 +250,13 @@ pub fn credit_merchant_balance_for_token(
             earnings.accruals.one_off = earnings
                 .accruals
                 .one_off
+                .checked_add(amount)
+                .ok_or(Error::Overflow)?
+        }
+        BillingChargeKind::Charge => {
+            earnings.accruals.interval = earnings
+                .accruals
+                .interval
                 .checked_add(amount)
                 .ok_or(Error::Overflow)?
         }

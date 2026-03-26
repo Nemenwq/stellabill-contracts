@@ -33,6 +33,10 @@ mod test_refactor_check;
 mod test_utils;
 #[cfg(test)]
 mod test_governance;
+#[cfg(test)]
+mod test_insufficient_balance;
+#[cfg(test)]
+mod test_security;
 
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
@@ -49,10 +53,11 @@ pub use types::{
     LifetimeCapReachedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
     MetadataDeletedEvent, MetadataSetEvent, MigrationExportEvent, NextChargeInfo,
     OneOffChargedEvent, OracleConfig, OraclePrice, PartialRefundEvent, PlanTemplate,
-    PlanTemplateUpdatedEvent, RecoveryEvent, RecoveryReason, Subscription,
-    SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionCreatedEvent,
+    PlanTemplateUpdatedEvent, PlanMaxActiveUpdatedEvent, RecoveryEvent, RecoveryReason, Subscription,
+    SubscriptionCancelledEvent, SubscriptionChargedEvent, SubscriptionChargeFailedEvent, SubscriptionCreatedEvent,
     SubscriptionMigratedEvent, SubscriptionPausedEvent, SubscriptionResumedEvent,
-    SubscriptionStatus, SubscriptionSummary, UsageLimits, UsageState, UsageStatementEvent,
+    SubscriptionRecoveryReadyEvent, SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
+    UsageLimits, UsageState, UsageStatementEvent, MerchantRefundEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
 };
 /// Maximum subscription ID this contract will ever allocate.
@@ -1045,10 +1050,6 @@ impl SubscriptionVault {
         merchant::get_merchant_config(&env, merchant)
     }
 }
-
-mod test;
-#[cfg(test)]
-mod test;
 
 #[cfg(test)]
 mod test_usage_limits;
