@@ -7,7 +7,7 @@
 use crate::{charge_core::charge_one, ChargeExecutionResult};
 use crate::types::{
     AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
-    RecoveryReason, SubscriptionStatus,
+    RecoveryReason,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
@@ -58,12 +58,17 @@ pub fn require_admin(env: &Env) -> Result<Address, Error> {
         .ok_or(Error::NotInitialized)
 }
 
-pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+pub fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
+    let stored_admin = require_admin(env)?;
+    if admin != &stored_admin {
+        return Err(Error::Unauthorized);
     }
+    Ok(())
+}
+
+pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
     env.storage()
         .instance()
         .set(&Symbol::new(env, "min_topup"), &min_topup);
@@ -80,11 +85,7 @@ pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
 }
 
 pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Result<(), Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
     env.storage()
         .instance()
         .set(&Symbol::new(env, "grace_period"), &grace_period);
@@ -125,11 +126,7 @@ pub fn add_accepted_token(
     token: Address,
     decimals: u32,
 ) -> Result<(), Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
 
     let storage = env.storage().instance();
     if !storage.has(&accepted_token_decimals_key(env, &token)) {
@@ -144,11 +141,7 @@ pub fn add_accepted_token(
 }
 
 pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Result<(), Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
 
     let default_token = get_token(env)?;
     if token == default_token {
@@ -223,17 +216,7 @@ pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
 }
 
 pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
-    current_admin.require_auth();
-
-    let stored_admin: Address = env
-        .storage()
-        .instance()
-        .get(&Symbol::new(env, "admin"))
-        .ok_or(Error::NotInitialized)?;
-
-    if current_admin != stored_admin {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &current_admin)?;
 
     // Disallow self-rotation: rotating to the same address is a no-op that
     // could mask misconfiguration and wastes a transaction.
@@ -272,17 +255,7 @@ pub fn do_recover_stranded_funds(
     amount: i128,
     reason: RecoveryReason,
 ) -> Result<(), Error> {
-    admin.require_auth();
-
-    let stored_admin: Address = env
-        .storage()
-        .instance()
-        .get(&Symbol::new(env, "admin"))
-        .ok_or(Error::NotInitialized)?;
-
-    if admin != stored_admin {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
 
     if amount <= 0 {
         return Err(Error::InvalidRecoveryAmount);

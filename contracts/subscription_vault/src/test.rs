@@ -139,6 +139,11 @@ fn seed_merchant_balance(
     });
 }
 
+fn create_secondary_token(env: &Env) -> Address {
+    env.register_stellar_asset_contract_v2(Address::generate(env))
+        .address()
+}
+
 fn snapshot_subscriptions(
     client: &SubscriptionVaultClient,
     ids: &[u32],
@@ -3721,7 +3726,7 @@ fn test_rotate_admin_unauthorized() {
     let stranger = Address::generate(&test_env.env);
     let new_admin = Address::generate(&test_env.env);
     let result = test_env.client.try_rotate_admin(&stranger, &new_admin);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -3747,7 +3752,7 @@ fn test_old_admin_loses_access_after_rotation() {
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
     // Old admin can no longer call set_min_topup.
     let result = test_env.client.try_set_min_topup(&test_env.admin, &2_000_000i128);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -3765,7 +3770,7 @@ fn test_set_min_topup_unauthorized_before_rotation() {
     let test_env = TestEnv::default();
     let stranger = Address::generate(&test_env.env);
     let result = test_env.client.try_set_min_topup(&stranger, &2_000_000i128);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -3776,11 +3781,11 @@ fn test_set_min_topup_unauthorized_after_rotation() {
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &2_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
         test_env.client.try_set_min_topup(&stranger, &2_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
 }
 
@@ -3795,7 +3800,7 @@ fn test_recover_stranded_funds_unauthorized_before_rotation() {
         &1_000_000i128,
         &RecoveryReason::AccidentalTransfer,
     );
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -3811,7 +3816,7 @@ fn test_recover_stranded_funds_unauthorized_after_rotation() {
             &1_000_000i128,
             &RecoveryReason::AccidentalTransfer
         ),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
 }
 
@@ -3841,7 +3846,7 @@ fn test_admin_rotation_affects_recovery_operations() {
             &1_000_000i128,
             &RecoveryReason::AccidentalTransfer
         ),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
 
     // New admin can recover.
@@ -3890,7 +3895,7 @@ fn test_multiple_admin_rotations() {
     for stale in [&test_env.admin, &admin_b, &admin_c] {
         assert_eq!(
             test_env.client.try_set_min_topup(stale, &1_000_000i128),
-            Err(Ok(Error::Forbidden))
+            Err(Ok(Error::Unauthorized))
         );
     }
 }
@@ -3905,7 +3910,7 @@ fn test_admin_cannot_be_rotated_by_previous_admin() {
 
     // admin1 cannot rotate again.
     let result = test_env.client.try_rotate_admin(&test_env.admin, &admin3);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
     assert_eq!(test_env.client.get_admin(), admin2);
 }
 
@@ -3982,11 +3987,11 @@ fn test_admin_rotation_access_control_comprehensive() {
     test_env.client.set_min_topup(&test_env.admin, &1_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&admin2, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
         test_env.client.try_set_min_topup(&non_admin, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
 
     // Phase 2: rotate to admin2.
@@ -3994,11 +3999,11 @@ fn test_admin_rotation_access_control_comprehensive() {
     test_env.client.set_min_topup(&admin2, &2_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
         test_env.client.try_set_min_topup(&non_admin, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
 
     // Phase 3: rotate to admin3.
@@ -4006,16 +4011,213 @@ fn test_admin_rotation_access_control_comprehensive() {
     test_env.client.set_min_topup(&admin3, &3_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
         test_env.client.try_set_min_topup(&admin2, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
         test_env.client.try_set_min_topup(&non_admin, &1_000_000i128),
-        Err(Ok(Error::Forbidden))
+        Err(Ok(Error::Unauthorized))
     );
+}
+
+#[test]
+fn test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoints() {
+    let test_env = TestEnv::default();
+    let stranger = Address::generate(&test_env.env);
+    let recipient = Address::generate(&test_env.env);
+    let token_to_remove = create_secondary_token(&test_env.env);
+    let token_to_add = create_secondary_token(&test_env.env);
+    let (subscription_id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    test_env
+        .client
+        .add_accepted_token(&test_env.admin, &token_to_remove, &6);
+    test_env.client.enable_emergency_stop(&test_env.admin);
+
+    assert_eq!(
+        test_env.client.try_set_min_topup(&stranger, &2_000_000i128),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_rotate_admin(&stranger, &Address::generate(&test_env.env)),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_recover_stranded_funds(
+            &stranger,
+            &recipient,
+            &1_000_000i128,
+            &RecoveryReason::AccidentalTransfer
+        ),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_add_accepted_token(&stranger, &token_to_add, &6),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_remove_accepted_token(&stranger, &token_to_remove),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_enable_emergency_stop(&stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_disable_emergency_stop(&stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert!(matches!(
+        test_env.client.try_export_contract_snapshot(&stranger),
+        Err(Ok(Error::Unauthorized))
+    ));
+    assert!(matches!(
+        test_env
+            .client
+            .try_export_subscription_summary(&stranger, &subscription_id),
+        Err(Ok(Error::Unauthorized))
+    ));
+    assert_eq!(
+        test_env
+            .client
+            .try_export_subscription_summaries(&stranger, &0, &10),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_set_billing_retention(&stranger, &5),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_compact_billing_statements(&stranger, &subscription_id, &None::<u32>),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_set_oracle_config(&stranger, &false, &None::<Address>, &0u64),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_set_subscriber_credit_limit(
+            &stranger,
+            &subscriber,
+            &test_env.token,
+            &AMOUNT
+        ),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+#[test]
+fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
+    let test_env = TestEnv::default();
+    let new_admin = Address::generate(&test_env.env);
+    let recipient = Address::generate(&test_env.env);
+    let token_to_remove = create_secondary_token(&test_env.env);
+    let token_to_add = create_secondary_token(&test_env.env);
+    let (subscription_id, subscriber, _) =
+        fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+
+    test_env
+        .client
+        .add_accepted_token(&test_env.admin, &token_to_remove, &6);
+    test_env.client.enable_emergency_stop(&test_env.admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+
+    assert_eq!(
+        test_env.client.try_set_min_topup(&test_env.admin, &2_000_000i128),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_rotate_admin(&test_env.admin, &Address::generate(&test_env.env)),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_recover_stranded_funds(
+            &test_env.admin,
+            &recipient,
+            &1_000_000i128,
+            &RecoveryReason::AccidentalTransfer
+        ),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_add_accepted_token(&test_env.admin, &token_to_add, &6),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_remove_accepted_token(&test_env.admin, &token_to_remove),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_enable_emergency_stop(&test_env.admin),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_disable_emergency_stop(&test_env.admin),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert!(matches!(
+        test_env.client.try_export_contract_snapshot(&test_env.admin),
+        Err(Ok(Error::Unauthorized))
+    ));
+    assert!(matches!(
+        test_env
+            .client
+            .try_export_subscription_summary(&test_env.admin, &subscription_id),
+        Err(Ok(Error::Unauthorized))
+    ));
+    assert_eq!(
+        test_env
+            .client
+            .try_export_subscription_summaries(&test_env.admin, &0, &10),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_set_billing_retention(&test_env.admin, &5),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_compact_billing_statements(&test_env.admin, &subscription_id, &None::<u32>),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_set_oracle_config(&test_env.admin, &false, &None::<Address>, &0u64),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env.client.try_set_subscriber_credit_limit(
+            &test_env.admin,
+            &subscriber,
+            &test_env.token,
+            &AMOUNT
+        ),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    test_env.client.disable_emergency_stop(&new_admin);
+    test_env.client.set_min_topup(&new_admin, &2_000_000i128);
+    assert_eq!(test_env.client.get_min_topup(), 2_000_000i128);
 }
 
 // -- Edge cases ---------------------------------------------------------------

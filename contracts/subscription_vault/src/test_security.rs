@@ -95,14 +95,14 @@ fn test_pause_subscription_unauthorized_stranger() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #403)")]
+#[should_panic(expected = "Error(Contract, #401)")]
 fn test_rotate_admin_unauthorized() {
     let (env, client, _, _) = setup_security_env();
     let stranger = Address::generate(&env);
     let new_admin = Address::generate(&env);
 
     // We need to mock auth for the stranger to bypass the Auth check,
-    // then the contract should fail with Error::Forbidden (403).
+    // then the contract should fail with Error::Unauthorized (401).
     env.mock_all_auths();
     client.rotate_admin(&stranger, &new_admin);
 }
