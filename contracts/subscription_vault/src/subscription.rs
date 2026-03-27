@@ -18,12 +18,14 @@
 //! See `docs/reentrancy.md` for full details on reentrancy threats and mitigations.
 
 use crate::queries::get_subscription;
-use crate::safe_math::{safe_add_balance, validate_non_negative};
+use crate::safe_math::{safe_add, safe_add_balance, safe_sub, validate_non_negative};
 use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
-    Subscription, SubscriptionMigratedEvent, SubscriptionStatus, UsageLimits, UsageState,
+    BillingChargeKind, DataKey, Error, FundsDepositedEvent, PartialRefundEvent, PlanTemplate,
+    PlanTemplateUpdatedEvent, PlanMaxActiveUpdatedEvent, SubscriberWithdrawalEvent, Subscription,
+    SubscriptionCancelledEvent, SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent,
+    SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus, UsageLimits, UsageState,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -32,14 +34,14 @@ pub fn next_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_id");
     let storage = env.storage().instance();
     let id: u32 = storage.get(&key).unwrap_or(0);
-    storage.set(&key, &(id + 1));
+    storage.set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
     id
 }
 
 pub fn next_plan_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_plan_id");
     let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage().instance().set(&key, &(id + 1));
+    env.storage().instance().set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
     id
 }
 
@@ -146,13 +148,11 @@ fn compute_subscriber_exposure(
             }
 
             // Base exposure: current prepaid balance.
-            exposure = exposure
-                .checked_add(sub.prepaid_balance)
-                .ok_or(Error::Overflow)?;
+            exposure = safe_add(exposure, sub.prepaid_balance)?;
 
             // For active subscriptions we also treat the next interval amount as expected liability.
             if sub.status == SubscriptionStatus::Active {
-                exposure = exposure.checked_add(sub.amount).ok_or(Error::Overflow)?;
+                exposure = safe_add(exposure, sub.amount)?;
             }
         }
     }
@@ -178,9 +178,7 @@ fn enforce_credit_limit_for_delta(
     }
 
     let current = compute_subscriber_exposure(env, subscriber, token)?;
-    let new_exposure = current
-        .checked_add(additional_liability)
-        .ok_or(Error::Overflow)?;
+    let new_exposure = safe_add(current, additional_liability)?;
     if new_exposure > limit {
         return Err(Error::CreditLimitExceeded);
     }
@@ -266,7 +264,7 @@ pub fn do_create_subscription_with_token(
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
-    env.storage().instance().set(&key, &(id + 1));
+    env.storage().instance().set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
 
     env.storage().instance().set(&id, &sub);
 
@@ -356,14 +354,25 @@ pub fn do_deposit_funds(
         || sub.status == SubscriptionStatus::GracePeriod)
         && sub.prepaid_balance >= sub.amount
     {
+        sub.status = SubscriptionStatus::Active;
+        env.storage().instance().set(&subscription_id, &sub);
+
         env.events().publish(
             (Symbol::new(env, "recovery_ready"), subscription_id),
             SubscriptionRecoveryReadyEvent {
                 subscription_id,
-                subscriber: sub.subscriber,
+                subscriber: sub.subscriber.clone(),
                 prepaid_balance: sub.prepaid_balance,
                 required_amount: sub.amount,
                 timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        env.events().publish(
+            (Symbol::new(env, "sub_resumed"), subscription_id),
+            crate::types::SubscriptionResumedEvent {
+                subscription_id,
+                authorizer: sub.subscriber.clone(),
             },
         );
     }
@@ -530,20 +539,14 @@ pub fn do_charge_one_off(
 
     // Enforce lifetime cap for one-off charges
     if let Some(cap) = sub.lifetime_cap {
-        let new_charged = sub
-            .lifetime_charged
-            .checked_add(amount)
-            .ok_or(Error::Overflow)?;
+        let new_charged = safe_add(sub.lifetime_charged, amount)?;
         if new_charged > cap {
             return Err(Error::LifetimeCapReached);
         }
         sub.lifetime_charged = new_charged;
     }
 
-    sub.prepaid_balance = sub
-        .prepaid_balance
-        .checked_sub(amount)
-        .ok_or(Error::Overflow)?;
+    sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
     crate::merchant::credit_merchant_balance_for_token(
         env,
@@ -661,10 +664,7 @@ pub fn do_partial_refund(
     }
 
     // Effects: debit balance before external call.
-    sub.prepaid_balance = sub
-        .prepaid_balance
-        .checked_sub(amount)
-        .ok_or(Error::Overflow)?;
+    sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
     env.storage().instance().set(&subscription_id, &sub);
 
     // Interactions: transfer refund from vault to subscriber.
@@ -773,7 +773,7 @@ pub fn do_create_subscription_from_plan(
 
     let key = Symbol::new(env, "next_id");
     let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage().instance().set(&key, &(id + 1));
+    env.storage().instance().set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
 
     let sub = Subscription {
         subscriber: subscriber.clone(),
@@ -854,7 +854,7 @@ pub fn do_update_plan_template(
     }
 
     let new_plan_id = next_plan_id(env);
-    let new_version = existing.version + 1;
+    let new_version = safe_add(existing.version as i128, 1).unwrap_or(0) as u32;
     let updated = PlanTemplate {
         merchant: merchant.clone(),
         token,

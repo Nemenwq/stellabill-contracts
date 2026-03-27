@@ -12,9 +12,12 @@
 //!
 //! See `docs/reentrancy.md` for details on the reentrancy threat model and mitigation.
 
-use crate::safe_math::{safe_sub_balance, validate_non_negative};
-use crate::types::{Error, MerchantConfig, MerchantWithdrawalEvent};
-use soroban_sdk::{token, Address, Env, Symbol};
+use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
+use crate::types::{
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+};
+use soroban_sdk::{token, Address, Env, Symbol, Vec};
 
 pub fn get_merchant_paused(env: &Env, merchant: Address) -> bool {
     // Check both legacy Pause state and new Config state if they overlap
@@ -222,7 +225,7 @@ pub fn credit_merchant_balance_for_token(
 
     // Update simple balance
     let current = get_merchant_balance_by_token(env, merchant, token_addr);
-    let new_balance = current.checked_add(amount).ok_or(Error::Overflow)?;
+    let new_balance = safe_add(current, amount)?;
     set_merchant_balance(env, merchant, token_addr, &new_balance);
 
     // Update earnings struct
@@ -283,14 +286,13 @@ pub fn withdraw_merchant_funds_for_token(
         return Err(Error::InsufficientBalance);
     }
 
+    // Explicitly check vault's actual token balance before attempting transfer
     let token_client = token::Client::new(env, &token_addr);
-    let contract = env.current_contract_address();
-    let contract_balance = token_client.balance(&contract);
-    if contract_balance < amount {
+    if token_client.balance(&env.current_contract_address()) < amount {
         return Err(Error::InsufficientBalance);
     }
 
-    let new_balance = safe_sub_balance(current, amount)?;
+    let new_balance = safe_sub(current, amount)?;
 
     // ──────────────────────────────────────────────────────────────────────────
     // EFFECTS: Update internal state before external interactions (CEI pattern)
@@ -312,8 +314,10 @@ pub fn withdraw_merchant_funds_for_token(
 
     // ──────────────────────────────────────────────────────────────────────────
     // INTERACTIONS: Only after internal state is consistent, call token contract
-    // This ensures that even if token contract calls back, our state is correct
+    // INTERACTIONS: Only after internal state is consistent, call token contract
     // ──────────────────────────────────────────────────────────────────────────
+    let token_client = token::Client::new(env, &token_addr);
+    let contract = env.current_contract_address();
     token_client.transfer(&contract, &merchant, &amount);
 
     Ok(())

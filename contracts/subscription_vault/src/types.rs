@@ -44,6 +44,9 @@ pub enum DataKey {
     BillingStatementsByMerchant(Address),
     MerchantTokens(Address),
     MerchantEarnings(Address, Address),
+    UsageLimits(u32),
+    UsageState(u32),
+    MerchantConfig(Address),
 }
 
 /// Accrued totals by charge kind.
@@ -102,7 +105,7 @@ pub struct TokenReconciliationSnapshot {
 /// - **GracePeriod**: Subscription is in grace period after a missed charge.
 ///   - Can transition to: `Active`, `InsufficientBalance`, `Cancelled`
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubscriptionStatus {
     /// Subscription is active and ready for charging.
     Active = 0,
@@ -184,7 +187,7 @@ impl InsufficientBalanceError {
 }
 
 #[contracterror]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
     // --- Auth Errors (401-403) ---
@@ -281,6 +284,10 @@ pub enum Error {
     UsageCapExceeded = 1034,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 1035,
+    /// Rotation to the same admin address is not allowed.
+    SelfRotation = 1036,
+    /// The provided new admin address is invalid.
+    InvalidNewAdmin = 1037,
 }
 
 impl Error {
@@ -325,6 +332,8 @@ impl Error {
             Error::RateLimitExceeded => 1033,
             Error::UsageCapExceeded => 1034,
             Error::BurstLimitExceeded => 1035,
+            Error::SelfRotation => 1036,
+            Error::InvalidNewAdmin => 1037,
         }
     }
 }
@@ -449,7 +458,7 @@ pub struct CapInfo {
 
 /// Canonical charge category used for billing statement history.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BillingChargeKind {
     Interval = 0,
     Usage = 1,
@@ -814,6 +823,13 @@ pub struct UsageStatementEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChargeExecutionResult {
+    Charged = 0,
+    InsufficientBalance = 1,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageLimits {
     pub rate_limit_max_calls: Option<u32>,
@@ -868,4 +884,12 @@ pub struct MerchantPausedEvent {
 pub struct MerchantUnpausedEvent {
     pub merchant: Address,
     pub timestamp: u64,
+}
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantRefundEvent {
+    pub merchant: Address,
+    pub subscriber: Address,
+    pub token: Address,
+    pub amount: i128,
 }
