@@ -206,6 +206,66 @@ impl MockOracle {
     }
 }
 
+fn lcg_next(seed: &mut u64) -> u64 {
+    const A: u64 = 1664525;
+    const C: u64 = 1013904223;
+    *seed = seed.wrapping_mul(A).wrapping_add(C);
+    *seed
+}
+
+fn manual_can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool {
+    use SubscriptionStatus::*;
+
+    if from == to {
+        return true;
+    }
+
+    match (from, to) {
+        (Active, Paused) => true,
+        (Active, Cancelled) => true,
+        (Active, InsufficientBalance) => true,
+        (Active, GracePeriod) => true,
+        (Paused, Active) => true,
+        (Paused, Cancelled) => true,
+        (InsufficientBalance, Active) => true,
+        (InsufficientBalance, Cancelled) => true,
+        (GracePeriod, Active) => true,
+        (GracePeriod, Cancelled) => true,
+        (GracePeriod, InsufficientBalance) => true,
+        _ => false,
+    }
+}
+
+fn random_transition_action(seed: &mut u64) -> u32 {
+    (lcg_next(seed) % 5) as u32
+}
+
+fn transition_action_target(action: u32) -> SubscriptionStatus {
+    match action % 5 {
+        0 => SubscriptionStatus::Active,
+        1 => SubscriptionStatus::Paused,
+        2 => SubscriptionStatus::Cancelled,
+        3 => SubscriptionStatus::InsufficientBalance,
+        _ => SubscriptionStatus::GracePeriod,
+    }
+}
+
+fn random_lifecycle_action(seed: &mut u64) -> LifecycleAction {
+    match lcg_next(seed) % 3 {
+        0 => LifecycleAction::Pause,
+        1 => LifecycleAction::Resume,
+        _ => LifecycleAction::Cancel,
+    }
+}
+
+fn lifecycle_action_target(action: LifecycleAction) -> SubscriptionStatus {
+    match action {
+        LifecycleAction::Pause => SubscriptionStatus::Paused,
+        LifecycleAction::Resume => SubscriptionStatus::Active,
+        LifecycleAction::Cancel => SubscriptionStatus::Cancelled,
+    }
+}
+
 // ── State Machine Helper Tests ─────────────────────────────────────────────────
 
 #[test]

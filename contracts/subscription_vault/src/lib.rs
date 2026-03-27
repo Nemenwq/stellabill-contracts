@@ -70,7 +70,6 @@ pub use types::{
 /// When the counter reaches this value [`SubscriptionVault::create_subscription`]
 /// returns [`Error::SubscriptionLimitReached`] instead of wrapping or panicking.
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
-pub const MAX_SUBSCRIPTION_LIST_PAGE: u32 = 100;
 
 const STORAGE_VERSION: u32 = 2;
 const MAX_EXPORT_LIMIT: u32 = 100;
