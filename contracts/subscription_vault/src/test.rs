@@ -2,7 +2,7 @@ use crate::{
     can_transition, compute_next_charge_info, get_allowed_transitions, validate_status_transition,
     AdminRotatedEvent, ChargeExecutionResult, Error, MerchantWithdrawalEvent, OraclePrice,
     RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
-    MAX_SUBSCRIPTION_ID, FundsDepositedEvent, SubscriptionChargedEvent,
+    MAX_SUBSCRIPTION_ID, MAX_SUBSCRIPTION_LIST_PAGE, FundsDepositedEvent, SubscriptionChargedEvent,
     SubscriptionChargeFailedEvent, LifetimeCapReachedEvent, PartialRefundEvent,
 };
 use soroban_sdk::testutils::{Address as _, Ledger as _, Events};
