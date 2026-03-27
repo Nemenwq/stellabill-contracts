@@ -67,6 +67,12 @@ pub fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn require_stored_admin_auth(env: &Env) -> Result<Address, Error> {
+    let stored_admin = require_admin(env)?;
+    stored_admin.require_auth();
+    Ok(stored_admin)
+}
+
 pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
     env.storage()
@@ -182,8 +188,7 @@ pub fn do_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
 ) -> Result<Vec<BatchChargeResult>, Error> {
-    let auth_admin = require_admin(env)?;
-    auth_admin.require_auth();
+    let _admin = require_stored_admin_auth(env)?;
 
     let now = env.ledger().timestamp();
     let mut results = Vec::new(env);

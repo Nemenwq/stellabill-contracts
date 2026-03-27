@@ -545,7 +545,7 @@ impl SubscriptionVault {
         )
     }
 
-    /// Set a per-subscriber credit limit for a specific settlement token.
+    /// Set a per-subscriber credit limit for a specific settlement token. Admin only.
     ///
     /// The limit is expressed in token base units and applies across all of the
     /// subscriber's subscriptions using that token. When the aggregate exposure

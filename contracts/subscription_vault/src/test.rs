@@ -4032,10 +4032,14 @@ fn test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoint
     let token_to_add = create_secondary_token(&test_env.env);
     let (subscription_id, subscriber, _) =
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let blocklisted_subscriber = Address::generate(&test_env.env);
 
     test_env
         .client
         .add_accepted_token(&test_env.admin, &token_to_remove, &6);
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &blocklisted_subscriber, &None::<String>);
     test_env.client.enable_emergency_stop(&test_env.admin);
 
     assert_eq!(
@@ -4065,6 +4069,12 @@ fn test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoint
         test_env
             .client
             .try_remove_accepted_token(&stranger, &token_to_remove),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_remove_from_blocklist(&stranger, &blocklisted_subscriber),
         Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
@@ -4127,10 +4137,14 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
     let token_to_add = create_secondary_token(&test_env.env);
     let (subscription_id, subscriber, _) =
         fixtures::create_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    let blocklisted_subscriber = Address::generate(&test_env.env);
 
     test_env
         .client
         .add_accepted_token(&test_env.admin, &token_to_remove, &6);
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &blocklisted_subscriber, &None::<String>);
     test_env.client.enable_emergency_stop(&test_env.admin);
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
 
@@ -4163,6 +4177,12 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
         test_env
             .client
             .try_remove_accepted_token(&test_env.admin, &token_to_remove),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_remove_from_blocklist(&test_env.admin, &blocklisted_subscriber),
         Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
@@ -4216,6 +4236,9 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
     );
 
     test_env.client.disable_emergency_stop(&new_admin);
+    test_env
+        .client
+        .remove_from_blocklist(&new_admin, &blocklisted_subscriber);
     test_env.client.set_min_topup(&new_admin, &2_000_000i128);
     assert_eq!(test_env.client.get_min_topup(), 2_000_000i128);
 }

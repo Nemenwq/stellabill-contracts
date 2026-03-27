@@ -83,12 +83,7 @@ pub fn do_remove_from_blocklist(
     admin: Address,
     subscriber: Address,
 ) -> Result<(), Error> {
-    admin.require_auth();
-
-    let stored_admin = crate::admin::require_admin(env)?;
-    if admin != stored_admin {
-        return Err(Error::Unauthorized);
-    }
+    crate::admin::require_admin_auth(env, &admin)?;
 
     let key = blocklist_key(env, &subscriber);
     if !env.storage().instance().has(&key) {
