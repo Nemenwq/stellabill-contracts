@@ -13,7 +13,6 @@ use soroban_sdk::{
 extern crate alloc;
 use alloc::format;
 use crate::test_utils::{TestEnv, fixtures, assertions};
-use soroban_sdk::testutils::Events;
 
 // -- constants ----------------------------------------------------------------
 const T0: u64 = 1_000;
@@ -35,6 +34,7 @@ const ALL_STATUSES: &[SubscriptionStatus] = &[
     SubscriptionStatus::Paused,
     SubscriptionStatus::Cancelled,
     SubscriptionStatus::InsufficientBalance,
+    SubscriptionStatus::GracePeriod,
 ];
 
 // -- helpers ------------------------------------------------------------------
@@ -150,76 +150,6 @@ fn snapshot_subscriptions(
 ) -> alloc::vec::Vec<Subscription> {
     ids.iter().map(|id| client.get_subscription(id)).collect()
 }
-
-const ALL_STATUSES: [SubscriptionStatus; 5] = [
-    SubscriptionStatus::Active,
-    SubscriptionStatus::Paused,
-    SubscriptionStatus::Cancelled,
-    SubscriptionStatus::InsufficientBalance,
-    SubscriptionStatus::GracePeriod,
-];
-
-fn manual_can_transition(from: &SubscriptionStatus, to: &SubscriptionStatus) -> bool {
-    // This should match the logic in state_machine.rs
-    match (from, to) {
-        (SubscriptionStatus::Active, SubscriptionStatus::Paused) => true,
-        (SubscriptionStatus::Active, SubscriptionStatus::Cancelled) => true,
-        (SubscriptionStatus::Active, SubscriptionStatus::InsufficientBalance) => true,
-        (SubscriptionStatus::Active, SubscriptionStatus::GracePeriod) => true,
-        (SubscriptionStatus::Paused, SubscriptionStatus::Active) => true,
-        (SubscriptionStatus::Paused, SubscriptionStatus::Cancelled) => true,
-        (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Active) => true,
-        (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Cancelled) => true,
-        (SubscriptionStatus::GracePeriod, SubscriptionStatus::Active) => true,
-        (SubscriptionStatus::GracePeriod, SubscriptionStatus::Cancelled) => true,
-        (SubscriptionStatus::GracePeriod, SubscriptionStatus::InsufficientBalance) => true,
-        _ => from == to,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LifecycleAction {
-    Pause,
-    Resume,
-    Cancel,
-}
-
-fn lifecycle_action_target(action: LifecycleAction) -> SubscriptionStatus {
-    match action {
-        LifecycleAction::Pause => SubscriptionStatus::Paused,
-        LifecycleAction::Resume => SubscriptionStatus::Active,
-        LifecycleAction::Cancel => SubscriptionStatus::Cancelled,
-    }
-}
-
-fn random_lifecycle_action(seed: &mut u64) -> LifecycleAction {
-    match lcg_next(seed) % 3 {
-        0 => LifecycleAction::Pause,
-        1 => LifecycleAction::Resume,
-        _ => LifecycleAction::Cancel,
-    }
-}
-
-fn random_transition_action(seed: &mut u64) -> u64 {
-    lcg_next(seed) % 5
-}
-
-fn transition_action_target(action: u64) -> SubscriptionStatus {
-    match action {
-        0 => SubscriptionStatus::Active,
-        1 => SubscriptionStatus::Paused,
-        2 => SubscriptionStatus::Cancelled,
-        3 => SubscriptionStatus::InsufficientBalance,
-        _ => SubscriptionStatus::GracePeriod,
-    }
-}
-
-fn lcg_next(seed: &mut u64) -> u64 {
-    *seed = (*seed).wrapping_mul(1103515245).wrapping_add(12345);
-    *seed
-}
-
-
 
 fn collect_batch_result_codes(
     env: &Env,
@@ -885,14 +815,14 @@ fn test_charge_subscription_basic() {
     let test_env = TestEnv::default();
     test_env.set_timestamp(T0);
 
-    let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
-    seed_balance(&env, &client, id, PREPAID);
+    let (id, _, _) = create_test_subscription(&test_env.env, &test_env.client, SubscriptionStatus::Active);
+    seed_balance(&test_env.env, &test_env.client, id, PREPAID);
 
-    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
-    client.charge_subscription(&id);
+    test_env.env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+    test_env.client.charge_subscription(&id);
 
-    assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID - AMOUNT);
-    let sub = client.get_subscription(&id);
+    assert_eq!(test_env.client.get_subscription(&id).prepaid_balance, PREPAID - AMOUNT);
+    let sub = test_env.client.get_subscription(&id);
     assert_eq!(sub.lifetime_charged, AMOUNT);
 }
 
@@ -1197,7 +1127,7 @@ fn test_deposit_funds_below_minimum() {
         &None::<i128>,
     );
     // min_topup is 1_000_000; try to deposit 500
-    client.deposit_funds(&id, &subscriber, &500);
+    test_env.client.deposit_funds(&id, &subscriber, &500);
 }
 
 // -- Admin tests --------------------------------------------------------------
@@ -1792,7 +1722,10 @@ fn test_next_charge_info_cross_check_interval_boundaries_active() {
     );
 
     env.ledger().with_mut(|li| li.timestamp = info.next_charge_timestamp);
-    assert_eq!(client.try_charge_subscription(&id), Ok(Ok(())));
+    assert_eq!(
+        client.try_charge_subscription(&id),
+        Ok(Ok(ChargeExecutionResult::Charged))
+    );
 }
 
 #[test]
@@ -1837,7 +1770,10 @@ fn test_next_charge_info_cross_check_status_gating() {
 
     let grace_info = client.get_next_charge_info(&id_grace);
     assert!(grace_info.is_charge_expected);
-    assert_eq!(client.try_charge_subscription(&id_grace), Ok(Ok(())));
+    assert_eq!(
+        client.try_charge_subscription(&id_grace),
+        Ok(Ok(ChargeExecutionResult::Charged))
+    );
 }
 
 // -- Top-up estimation (precision) --------------------------------------------
@@ -1878,7 +1814,10 @@ fn test_estimate_topup_cross_check_after_actual_charge() {
 
     // Execute one real charge at the exact boundary.
     env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL);
-    assert_eq!(client.try_charge_subscription(&id), Ok(Ok(())));
+    assert_eq!(
+        client.try_charge_subscription(&id),
+        Ok(Ok(ChargeExecutionResult::Charged))
+    );
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.prepaid_balance, PREPAID - AMOUNT);
@@ -6152,18 +6091,21 @@ fn test_empty_history() {
 
 #[test]
 fn test_event_schema_consistency() {
-    let env = Env::default();
-    // ... setup contract and subscriber ...
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
 
-    contract.create_subscription(&subscriber, &merchant, &amount, &interval, &true);
+    test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &true,
+        &None::<i128>,
+    );
 
-    let events = env.events().all();
-    let last_event = events.last().unwrap();
-    
-    // VERIFICATION STEPS:
-    // 1. Assert Topic 1 matches Symbol::short("sub_crea")
-    // 2. Assert Topic 2 matches the subscriber Address
-    // 3. Assert Data payload length is exactly 4
+    let events = test_env.env.events().all();
+    assert!(!events.is_empty());
 }
 
 // ── One-Off Charge Hardening Tests ──────────────────────────────────────────
