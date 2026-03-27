@@ -1108,6 +1108,223 @@ fn test_deposit_funds_below_minimum() {
     test_env.client.deposit_funds(&id, &subscriber, &500);
 }
 
+// -- Blocklist tests ----------------------------------------------------------
+
+#[test]
+fn test_blocklist_rejects_duplicate_add_and_preserves_original_entry() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+
+    let first_reason = Some(String::from_str(&test_env.env, "chargeback"));
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &first_reason);
+
+    let duplicate_reason = Some(String::from_str(&test_env.env, "retry"));
+    let duplicate = test_env
+        .client
+        .try_add_to_blocklist(&test_env.admin, &subscriber, &duplicate_reason);
+    assert_eq!(duplicate, Err(Ok(Error::InvalidInput)));
+
+    let entry = test_env.client.get_blocklist_entry(&subscriber);
+    assert_eq!(entry.added_by, test_env.admin);
+    assert_eq!(entry.reason, first_reason);
+}
+
+#[test]
+fn test_blocklist_add_and_remove_events_capture_reason_variants() {
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
+    let subscriber = Address::generate(&test_env.env);
+
+    let empty_reason = Some(String::from_str(&test_env.env, ""));
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &empty_reason);
+
+    let add_events = test_env.env.events().all();
+    let add_event = add_events.last().expect("missing blocklist add event");
+    assert_eq!(add_event.0, test_env.client.address);
+    assert_eq!(
+        Symbol::from_val(&test_env.env, &add_event.1.get(0).expect("missing add topic")),
+        Symbol::new(&test_env.env, "blocklist_added")
+    );
+    let added: crate::BlocklistAddedEvent = add_event.2.into_val(&test_env.env);
+    assert_eq!(added.subscriber, subscriber);
+    assert_eq!(added.added_by, test_env.admin);
+    assert_eq!(added.timestamp, T0);
+    assert_eq!(added.reason, empty_reason);
+
+    test_env.jump(60);
+    test_env
+        .client
+        .remove_from_blocklist(&test_env.admin, &subscriber);
+
+    let remove_events = test_env.env.events().all();
+    let remove_event = remove_events
+        .last()
+        .expect("missing blocklist remove event");
+    assert_eq!(remove_event.0, test_env.client.address);
+    assert_eq!(
+        Symbol::from_val(
+            &test_env.env,
+            &remove_event.1.get(0).expect("missing remove topic")
+        ),
+        Symbol::new(&test_env.env, "blocklist_removed")
+    );
+    let removed: crate::BlocklistRemovedEvent = remove_event.2.into_val(&test_env.env);
+    assert_eq!(removed.subscriber, subscriber);
+    assert_eq!(removed.removed_by, test_env.admin);
+    assert_eq!(removed.timestamp, T0 + 60);
+
+    let none_reason_subscriber = Address::generate(&test_env.env);
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &none_reason_subscriber, &None::<String>);
+    let none_entry = test_env.client.get_blocklist_entry(&none_reason_subscriber);
+    assert_eq!(none_entry.reason, None);
+}
+
+#[test]
+fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restores_access() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &100_000_000i128);
+
+    let direct_sub = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    test_env.client.pause_subscription(&direct_sub, &subscriber);
+
+    let plan_v1 =
+        test_env
+            .client
+            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let plan_v2 = test_env.client.update_plan_template(
+        &merchant,
+        &plan_v1,
+        &(AMOUNT + 1_000_000),
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    let plan_sub = test_env
+        .client
+        .create_subscription_from_plan(&subscriber, &plan_v1);
+
+    test_env.client.add_to_blocklist(
+        &test_env.admin,
+        &subscriber,
+        &Some(String::from_str(&test_env.env, "risk-review")),
+    );
+
+    assert_eq!(
+        test_env.client.try_create_subscription(
+            &subscriber,
+            &merchant,
+            &AMOUNT,
+            &INTERVAL,
+            &false,
+            &None::<i128>,
+        ),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+    assert_eq!(
+        test_env.client.try_create_subscription_with_token(
+            &subscriber,
+            &merchant,
+            &test_env.token,
+            &AMOUNT,
+            &INTERVAL,
+            &false,
+            &None::<i128>,
+        ),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_create_subscription_from_plan(&subscriber, &plan_v1),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_deposit_funds(&plan_sub, &subscriber, &5_000_000i128),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_resume_subscription(&direct_sub, &subscriber),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+    assert_eq!(
+        test_env
+            .client
+            .try_migrate_subscription_to_plan(&subscriber, &plan_sub, &plan_v2),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+
+    test_env
+        .client
+        .remove_from_blocklist(&test_env.admin, &subscriber);
+
+    let new_sub = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    test_env
+        .client
+        .deposit_funds(&plan_sub, &subscriber, &5_000_000i128);
+    test_env.client.resume_subscription(&direct_sub, &subscriber);
+    test_env
+        .client
+        .migrate_subscription_to_plan(&subscriber, &plan_sub, &plan_v2);
+
+    assertions::assert_status(&test_env.client, &direct_sub, SubscriptionStatus::Active);
+    assertions::assert_prepaid_balance(&test_env.client, &plan_sub, 5_000_000i128);
+    let migrated = test_env.client.get_subscription(&plan_sub);
+    assert_eq!(migrated.amount, AMOUNT + 1_000_000);
+    assert_eq!(test_env.client.is_blocklisted(&subscriber), false);
+    assert_eq!(
+        test_env.client.get_subscription(&new_sub).status,
+        SubscriptionStatus::Active
+    );
+}
+
+#[test]
+fn test_remove_from_blocklist_requires_admin_and_existing_entry() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    let missing = test_env
+        .client
+        .try_remove_from_blocklist(&test_env.admin, &subscriber);
+    assert_eq!(missing, Err(Ok(Error::NotFound)));
+
+    test_env
+        .client
+        .add_to_blocklist(&test_env.admin, &subscriber, &None::<String>);
+    let unauthorized = test_env
+        .client
+        .try_remove_from_blocklist(&merchant, &subscriber);
+    assert_eq!(unauthorized, Err(Ok(Error::Unauthorized)));
+}
+
 // -- Admin tests --------------------------------------------------------------
 
 #[test]
