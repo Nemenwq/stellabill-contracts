@@ -185,5 +185,6 @@ When the emergency stop is active, `charge_subscription` and `charge_usage` are 
 ## Validation
 
 - `lifetime_cap` must be `> 0` if provided. Zero and negative values are rejected with `Error::InvalidAmount`.
+- When creating a subscription directly, `lifetime_cap` (if provided) must be **at least** the recurring interval `amount`.
 - There is no minimum cap value above zero.
 - `lifetime_charged` is read-only from external callers — it is only incremented by the charge functions.

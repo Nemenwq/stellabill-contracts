@@ -75,9 +75,9 @@ The following operations require the caller to be the current admin:
 
 The contract enforces:
 
-1. **Authentication**: `current_admin.require_auth()` ensures the transaction is signed by the current admin.
-2. **Storage check**: The caller's address must match the stored admin. Non-admins and previous admins cannot pass this check.
-3. **Single source of truth**: All admin-protected operations read the admin from storage; there is no cached or alternate admin path.
+1. **Authentication**: admin-only entrypoints require Soroban `require_auth()` for the supplied admin address.
+2. **Storage check**: the caller's address must match the stored admin. Non-admins and previous admins are rejected with `Error::Unauthorized`.
+3. **Single source of truth**: all admin-protected operations read the admin from storage; there is no cached or alternate admin path.
 
 ### Access Control Matrix
 
