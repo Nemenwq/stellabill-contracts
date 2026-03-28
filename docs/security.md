@@ -5,7 +5,7 @@
 This document consolidates the overarching security assumptions, threat models, and corresponding mitigations for the Stellabill Subscription Vault smart contract on the Soroban network. It aggregates the deep-dives found in `docs/reentrancy.md`, `docs/replay_protection.md`, and `docs/safe_math.md` into a single, concise threat matrix mapping directly to contract functions and tests.
 
 **Primary Asset**: USDC in prepaid subscription balances  
-**Last Updated**: 2026-03-23
+**Last Updated**: 2026-03-27
 
 ---
 
@@ -27,7 +27,7 @@ This document consolidates the overarching security assumptions, threat models, 
 
 | Threat Category | Risk Description | Implemented Mitigations | Associated Functions | Test Coverage Verification |
 |-----------------|------------------|-------------------------|----------------------|----------------------------|
-| **Unauthorized Access** | Attackers or unauthorized users performing state-changing actions. | All state changes require Soroban `require_auth()` signature verification. Operational roles (Admin, Subscriber, Merchant) are explicitly validated. | `charge_subscription`, `batch_charge`, `deposit_funds`, `cancel_subscription`, `set_min_topup`, `rotate_admin` | `test_charge_subscription_unauthorized`, `test_cancel_subscription_unauthorized`, `test_set_min_topup_unauthorized`, `test_unauthorized_merchant_config_update` |
+| **Unauthorized Access** | Attackers or unauthorized users performing state-changing actions. | Shared admin guards plus explicit subscriber/merchant ownership checks. Admin-only routes return `Unauthorized` for wrong or stale admins, while ownership-gated non-admin routes use `Forbidden` where appropriate. | `set_min_topup`, `rotate_admin`, `recover_stranded_funds`, token registry, emergency controls, export endpoints, billing/oracle maintenance, `partial_refund`, `set_subscriber_credit_limit`, `remove_from_blocklist` | `test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoints`, `test_admin_authorization_matrix_rejects_stale_admin_after_rotation`, `test_rotate_admin_unauthorized`, `test_partial_refund_rejects_invalid_amounts_and_auth` |
 | **Reentrancy (Callbacks)** | Malicious token contracts or other external calls triggering recursive execution to drain funds or bypass state updates. | Strict adherence to the **Checks-Effects-Interactions (CEI)** pattern. Internal balances are updated in storage *before* any `token.transfer()` occurs. Optional runtime locks (`reentrancy.rs`) are available. | `do_deposit_funds`, `withdraw_merchant_funds`, `do_withdraw_subscriber_funds` | `test_deposit_funds_state_committed_before_transfer`, `test_withdraw_merchant_funds_state_committed_before_transfer`, `test_reentrancy_lock_prevents_recursive_calls` |
 | **Replay & Double Charging** | Re-executing a charge transaction within the same period to debit a subscriber multiple times. | Period-based tracking (`now >= last_payment_timestamp + interval_seconds`) ensures single deduction per interval. Deduplication relies on `idempotency_key` handling for retries without double-debits (`Error::Replay`). | `charge_subscription`, `batch_charge` | `test_charge_succeeds_at_exact_interval`, `test_immediate_retry_at_same_timestamp_rejected`, `test_replay_protection_on_batch_charge` |
 | **Arithmetic Risks** | Integer overflow or underflow leading to incorrect balances or state corruption. | Explicit use of Rust's checked arithmetic wrappers (`safe_add`, `safe_sub`) returning explicit `Error::Overflow` (500) and `Error::Underflow` (501). Prevents any silent wraparound or negative balances. | `safe_add_balance`, `safe_sub_balance`, `charge_one` | `test_safe_add_overflow_returns_error`, `test_safe_sub_underflow_returns_error`, `test_charge_amount_greater_than_balance_fails` |
@@ -46,7 +46,7 @@ The Security Regression Pack (found in `src/test_security.rs`) consolidates crit
 
 ### Risk Class 2: Authorization & Ownership
 - **Negative Test**: Attempt to pause or cancel a subscription using a "stranger" address (neither subscriber nor merchant).
-- **Negative Test**: Verify that `rotate_admin` and `recover_stranded_funds` fail when called by a non-admin.
+- **Negative Test**: Verify the full admin authorization matrix, including stale-admin rejection after rotation and deterministic `Unauthorized` responses across admin-only routes.
 
 ### Risk Class 3: Replay & Idempotency
 - **Negative Test**: Attempt to charge the same subscription twice within the same ledger timestamp.
@@ -69,12 +69,12 @@ While the current architecture rigorously applies the CEI pattern and strict ari
 2. **Storage Exhaustion (DoS)**: 
    - *Risk*: An attacker with valid signatures can spam `create_subscription` indefinitely, inflating ledger footprint arbitrarily.
    - *Future Hardening*: Introduce minimal initial deposit requirements, per-subscriber creation limits, and archival functions.
-3. **Owner Verification Gap**: 
-   - *Risk*: Actions like `pause_subscription` accept an `authorizer` without rigorously asserting whether that authorizer strictly matches `sub.subscriber` or `sub.merchant`.
-   - *Future Hardening*: Patch state-changing endpoints with explicit owner cross-checks: `if authorizer != sub.subscriber && ... { return Err; }`.
-4. **No Initialization Lock (`init`)**:
-   - *Risk*: The vault initialization endpoint can be accidentally re-called, potentially overwriting admin references.
-   - *Future Hardening*: Wrap `init` logic with a check for presence of a stored initialization constant (`Error::AlreadyInitialized`).
+3. **Stored-admin-only batch charging**:
+   - *Risk*: `batch_charge` authenticates against the stored admin without an explicit caller parameter, so unauthorized attempts fail at the Soroban host auth layer rather than with a contract `Unauthorized` code.
+   - *Future Hardening*: Preserve this intentionally if the API should stay parameterless; otherwise introduce an explicit admin argument and keep it on the shared guard path.
+4. **Admin key operational centralization**:
+   - *Risk*: Admin rotation removes stale access immediately, but the system still depends on one operational control plane.
+   - *Future Hardening*: Multi-sig admin rotation, hardware-backed signing, and incident runbooks for emergency-stop usage.
 
 ---
 

@@ -29,6 +29,8 @@ use crate::types::{
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
+const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
+
 #[allow(dead_code)]
 pub fn next_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_id");
@@ -227,19 +229,30 @@ pub fn do_create_subscription_with_token(
     expires_at: Option<u64>,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
-    validate_non_negative(amount)?;
 
-    if interval_seconds == 0 {
+    if crate::blocklist::is_blocklisted(env, &subscriber) {
+        return Err(Error::SubscriberBlocklisted);
+    }
+
+    validate_non_negative(amount)?;
+    if amount == 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    if interval_seconds < MIN_SUBSCRIPTION_INTERVAL_SECONDS {
         return Err(Error::InvalidInput);
     }
+
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
     }
 
-    // Validate lifetime_cap if provided
     if let Some(cap) = lifetime_cap {
         if cap <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if cap < amount {
+            return Err(Error::InvalidInput);
         }
     }
 
@@ -314,11 +327,7 @@ pub fn do_deposit_funds(
     amount: i128,
 ) -> Result<(), Error> {
     subscriber.require_auth();
-
-    // Blocklist check: prevent blocklisted subscribers from depositing funds
-    if crate::blocklist::is_blocklisted(env, &subscriber) {
-        return Err(Error::SubscriberBlocklisted);
-    }
+    crate::blocklist::require_not_blocklisted(env, &subscriber)?;
 
     // CHECKS: Validate all preconditions before any state mutations
     let min_topup: i128 = crate::admin::get_min_topup(env)?;
@@ -507,6 +516,9 @@ pub fn do_resume_subscription(
     if sub.is_expired(env.ledger().timestamp()) {
         return Err(Error::SubscriptionExpired);
     }
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
+    }
 
     validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
 
@@ -581,13 +593,13 @@ pub fn do_charge_one_off(
     }
 
     // Enforce lifetime cap for one-off charges
+    let new_charged = safe_add(sub.lifetime_charged, amount)?;
     if let Some(cap) = sub.lifetime_cap {
-        let new_charged = safe_add(sub.lifetime_charged, amount)?;
         if new_charged > cap {
             return Err(Error::LifetimeCapReached);
         }
-        sub.lifetime_charged = new_charged;
     }
+    sub.lifetime_charged = new_charged;
 
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
@@ -845,6 +857,7 @@ pub fn do_create_subscription_from_plan(
     plan_template_id: u32,
 ) -> Result<u32, Error> {
     subscriber.require_auth();
+    crate::blocklist::require_not_blocklisted(env, &subscriber)?;
 
     let plan = get_plan_template(env, plan_template_id)?;
 
@@ -978,6 +991,7 @@ pub fn do_migrate_subscription_to_plan(
     new_plan_template_id: u32,
 ) -> Result<(), Error> {
     subscriber.require_auth();
+    crate::blocklist::require_not_blocklisted(env, &subscriber)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
     if sub.subscriber != subscriber {
