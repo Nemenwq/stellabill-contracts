@@ -137,6 +137,7 @@ flowchart LR
 - **Entrypoint:** `create_subscription(env, subscriber, merchant, amount, interval_seconds, usage_enabled)`  
   Auth: subscriber.  
   Implemented in `contracts/subscription_vault/src/subscription.rs`.
+- **Validation:** Creation rejects `amount <= 0`, rejects intervals shorter than 60 seconds, and rejects blocklisted subscribers.
 - **Effect:** A new subscription is stored with `status: Active`, `last_payment_timestamp: env.ledger().timestamp()`, `prepaid_balance: 0`. No charge runs at creation; the first charge requires a deposit and a later `charge_subscription` or `batch_charge` call.
 
 ### Deposit
