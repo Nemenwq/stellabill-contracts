@@ -990,9 +990,16 @@ fn test_cancel_subscription_unauthorized() {
     let subscriber = Address::generate(&test_env.env);
     let merchant = Address::generate(&test_env.env);
     let other = Address::generate(&test_env.env);
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<i128>, &None::<u64>);
-    let result = client.try_cancel_subscription(&sub_id, &other);
+    let sub_id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1000,
+        &86400,
+        &true,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    let result = test_env.client.try_cancel_subscription(&sub_id, &other);
     assert_eq!(result, Err(Ok(Error::Forbidden)));
 }
 
@@ -1002,19 +1009,25 @@ fn test_withdraw_subscriber_funds() {
     let subscriber = Address::generate(&test_env.env);
     let merchant = Address::generate(&test_env.env);
 
-    soroban_sdk::token::StellarAssetClient::new(&test_env.env, &test_env.token)
-        .mint(&subscriber, &1_000_000);
+    test_env.stellar_token_client().mint(&subscriber, &1_000_000);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1000, &86400, &true, &None::<i128>, &None::<u64>);
-    client.deposit_funds(&sub_id, &subscriber, &5000);
-    client.cancel_subscription(&sub_id, &subscriber);
-    client.withdraw_subscriber_funds(&sub_id, &subscriber);
+    let sub_id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1000,
+        &86400,
+        &true,
+        &None::<i128>,
+        &None::<u64>,
+    );
+    test_env.client.deposit_funds(&sub_id, &subscriber, &5000);
+    test_env.client.cancel_subscription(&sub_id, &subscriber);
+    test_env.client.withdraw_subscriber_funds(&sub_id, &subscriber);
 
-    let sub = client.get_subscription(&sub_id);
+    let sub = test_env.client.get_subscription(&sub_id);
     assert_eq!(sub.prepaid_balance, 0);
-    assert_eq!(token.balance(&subscriber), 5000);
-    assert_eq!(token.balance(&contract_id), 0);
+    assert_eq!(test_env.token_client().balance(&subscriber), 5000);
+    assert_eq!(test_env.token_client().balance(&test_env.client.address), 0);
 }
 
 // ── Min-Topup Enforcement Tests ────────────────────────────────────────────────
@@ -2237,41 +2250,6 @@ fn test_compute_next_charge_info_insufficient_balance() {
 }
 
 #[test]
-fn test_compute_next_charge_info_overflow_protection() {
-    let env = Env::default();
-    let sub = Subscription {
-        subscriber: Address::generate(&env),
-        merchant: Address::generate(&env),
-        token: Address::generate(&env),
-        amount: AMOUNT,
-        interval_seconds: 200,
-        last_payment_timestamp: u64::MAX - 100,
-        status: SubscriptionStatus::Active,
-        prepaid_balance: 100_000_000,
-        usage_enabled: false,
-        lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
-    };
-    let info = compute_next_charge_info(&sub);
-    assert!(info.is_charge_expected);
-    assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
-
-    env.ledger()
-        .with_mut(|li| li.timestamp = info.next_charge_timestamp - 1);
-    assert_eq!(
-        client.try_charge_subscription(&id),
-        Err(Ok(Error::IntervalNotElapsed))
-    );
-
-    env.ledger()
-        .with_mut(|li| li.timestamp = info.next_charge_timestamp);
-    assert_eq!(
-        client.try_charge_subscription(&id),
-        Ok(Ok(ChargeExecutionResult::Charged))
-    );
-}
-
-#[test]
 fn test_next_charge_info_cross_check_status_gating() {
     let (env, client, _, _) = setup_test_env();
     env.ledger().with_mut(|li| li.timestamp = T0);
@@ -2392,7 +2370,8 @@ fn test_compute_next_charge_info_overflow_protection() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
-        grace_start_timestamp: None,
+        start_time: 0,
+        expires_at: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -7066,7 +7045,8 @@ mod storage_layout {
             usage_enabled: false,
             lifetime_cap: Some(120_000_000),
             lifetime_charged: 10_000_000,
-            grace_start_timestamp: None,
+            start_time: 0,
+            expires_at: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -7107,6 +7087,7 @@ mod storage_layout {
             &INTERVAL,
             &false,
             &None::<i128>,
+            &None::<u64>,
         );
 
         let sub = client.get_subscription(&id);
@@ -7132,6 +7113,7 @@ mod storage_layout {
             &INTERVAL,
             &false,
             &Some(cap),
+            &None::<u64>,
         );
 
         let sub = client.get_subscription(&id);
@@ -7167,7 +7149,8 @@ mod storage_layout {
             usage_enabled: false,
             lifetime_cap: None,
             lifetime_charged: 0,
-            grace_start_timestamp: None,
+            start_time: 0,
+            expires_at: None,
         };
 
         env.as_contract(&client.address, || {
@@ -7333,6 +7316,7 @@ fn test_merchant_token_bucket_reconciliation() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
 
     let id_b = client.create_subscription_with_token(
@@ -7343,6 +7327,7 @@ fn test_merchant_token_bucket_reconciliation() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
 
     client.deposit_funds(&id_a, &subscriber_a, &20_000_000i128);
@@ -7603,6 +7588,7 @@ fn test_event_schema_consistency() {
         &INTERVAL,
         &true,
         &None::<i128>,
+        &None::<u64>,
     );
 
     let events = test_env.env.events().all();
@@ -7654,6 +7640,7 @@ fn test_oneoff_zero_amount_rejected() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
@@ -7676,6 +7663,7 @@ fn test_oneoff_negative_amount_rejected() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 

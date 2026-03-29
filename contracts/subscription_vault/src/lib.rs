@@ -86,6 +86,7 @@ mod state_machine;
 mod statements;
 mod subscription;
 mod types;
+mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
