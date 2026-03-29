@@ -4,11 +4,11 @@
 
 #![allow(dead_code)]
 
-use crate::{charge_core::charge_one, ChargeExecutionResult};
 use crate::types::{
     AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
-    RecoveryReason, SubscriptionStatus,
+    RecoveryReason,
 };
+use crate::{charge_core::charge_one, ChargeExecutionResult};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
 fn accepted_tokens_key(env: &Env) -> Symbol {
@@ -58,12 +58,23 @@ pub fn require_admin(env: &Env) -> Result<Address, Error> {
         .ok_or(Error::NotInitialized)
 }
 
-pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+pub fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
     admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
+    let stored_admin = require_admin(env)?;
+    if admin != &stored_admin {
+        return Err(Error::Unauthorized);
     }
+    Ok(())
+}
+
+pub fn require_stored_admin_auth(env: &Env) -> Result<Address, Error> {
+    let stored_admin = require_admin(env)?;
+    stored_admin.require_auth();
+    Ok(stored_admin)
+}
+
+pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
     env.storage()
         .instance()
         .set(&Symbol::new(env, "min_topup"), &min_topup);
@@ -80,11 +91,7 @@ pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
 }
 
 pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Result<(), Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
     env.storage()
         .instance()
         .set(&Symbol::new(env, "grace_period"), &grace_period);
@@ -125,11 +132,7 @@ pub fn add_accepted_token(
     token: Address,
     decimals: u32,
 ) -> Result<(), Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
 
     let storage = env.storage().instance();
     if !storage.has(&accepted_token_decimals_key(env, &token)) {
@@ -144,11 +147,7 @@ pub fn add_accepted_token(
 }
 
 pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Result<(), Error> {
-    admin.require_auth();
-    let stored = require_admin(env)?;
-    if admin != stored {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
 
     let default_token = get_token(env)?;
     if token == default_token {
@@ -189,8 +188,7 @@ pub fn do_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
 ) -> Result<Vec<BatchChargeResult>, Error> {
-    let auth_admin = require_admin(env)?;
-    auth_admin.require_auth();
+    let _admin = require_stored_admin_auth(env)?;
 
     let now = env.ledger().timestamp();
     let mut results = Vec::new(env);
@@ -223,17 +221,7 @@ pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
 }
 
 pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
-    current_admin.require_auth();
-
-    let stored_admin: Address = env
-        .storage()
-        .instance()
-        .get(&Symbol::new(env, "admin"))
-        .ok_or(Error::NotInitialized)?;
-
-    if current_admin != stored_admin {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &current_admin)?;
 
     // Disallow self-rotation: rotating to the same address is a no-op that
     // could mask misconfiguration and wastes a transaction.
@@ -268,29 +256,41 @@ pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) ->
 pub fn do_recover_stranded_funds(
     env: &Env,
     admin: Address,
+    token: Address,
     recipient: Address,
     amount: i128,
+    recovery_id: String,
     reason: RecoveryReason,
 ) -> Result<(), Error> {
-    admin.require_auth();
-
-    let stored_admin: Address = env
-        .storage()
-        .instance()
-        .get(&Symbol::new(env, "admin"))
-        .ok_or(Error::NotInitialized)?;
-
-    if admin != stored_admin {
-        return Err(Error::Forbidden);
-    }
+    require_admin_auth(env, &admin)?;
 
     if amount <= 0 {
         return Err(Error::InvalidRecoveryAmount);
     }
 
+    // Check for replay protection
+    let recovery_key = DataKey::Recovery(recovery_id.clone());
+    if env.storage().persistent().has(&recovery_key) {
+        return Err(Error::Replay);
+    }
+
+    // Validate available recoverable balance
+    let token_client = token::Client::new(env, &token);
+    let contract_balance = token_client.balance(&env.current_contract_address());
+    let accounted_balance = crate::accounting::get_total_accounted(env, &token);
+    
+    let recoverable = contract_balance.checked_sub(accounted_balance).ok_or(Error::Underflow)?;
+    if amount > recoverable {
+        return Err(Error::InsufficientBalance);
+    }
+
+    // Mark recovery as executed
+    env.storage().persistent().set(&recovery_key, &true);
+
     let recovery_event = RecoveryEvent {
         admin: admin.clone(),
         recipient: recipient.clone(),
+        token: token.clone(),
         amount,
         reason,
         timestamp: env.ledger().timestamp(),
@@ -301,8 +301,8 @@ pub fn do_recover_stranded_funds(
         recovery_event,
     );
 
-    // TODO: Actual token transfer logic
-    // token_client.transfer(&env.current_contract_address(), &recipient, &amount);
+    // Actual token transfer logic
+    token_client.transfer(&env.current_contract_address(), &recipient, &amount);
 
     Ok(())
 }

@@ -2,14 +2,15 @@
 
 ## Overview
 
-The subscriber blocklist mechanism allows admins and merchants to prevent specific subscriber addresses from creating new subscriptions or depositing funds into the contract. This feature is designed for fraud prevention, dispute management, and access control while preserving existing financial obligations and balances.
+The subscriber blocklist mechanism allows admins and merchants to prevent specific subscriber addresses from creating new subscriptions or using subscriber-controlled mutation flows that would extend, restore, or reconfigure access. This feature is designed for fraud prevention, dispute management, and access control while preserving existing financial obligations, balances, and an auditable admin-only unblock path.
 
 ## Key Principles
 
-1. **Preventive, Not Punitive**: The blocklist prevents new subscriptions and deposits but does not seize or move existing funds.
+1. **Preventive, Not Punitive**: The blocklist prevents blocked subscribers from creating or re-activating access but does not seize or move existing funds.
 2. **Existing Obligations Preserved**: Blocklisted subscribers retain access to their existing subscriptions and prepaid balances.
 3. **Dual Authorization**: Both admins (global) and merchants (scoped) can add subscribers to the blocklist.
 4. **Admin-Only Removal**: Only admins can remove subscribers from the blocklist.
+5. **Stable Audit Trail**: Re-adding an already blocked subscriber is rejected so the original entry and reason are not overwritten.
 
 ## Authorization Model
 
@@ -30,8 +31,11 @@ The subscriber blocklist mechanism allows admins and merchants to prevent specif
 When a subscriber is blocklisted, the following operations are **blocked**:
 
 1. **`create_subscription`**: Cannot create new subscriptions
-2. **`create_subscription_from_plan`**: Cannot create subscriptions from plan templates
-3. **`deposit_funds`**: Cannot deposit additional funds into existing subscriptions
+2. **`create_subscription_with_token`**: Cannot create token-specific subscriptions
+3. **`create_subscription_from_plan`**: Cannot create subscriptions from plan templates
+4. **`deposit_funds`**: Cannot deposit additional funds into existing subscriptions
+5. **`resume_subscription`**: Cannot resume when the blocked subscriber is the authorizer
+6. **`migrate_subscription_to_plan`**: Cannot migrate an existing subscription to a new plan version
 
 All blocked operations return `Error::SubscriberBlocklisted`.
 
@@ -41,9 +45,10 @@ Blocklisted subscribers can still perform the following operations on **existing
 
 1. **`cancel_subscription`**: Can cancel their subscriptions
 2. **`pause_subscription`**: Can pause their subscriptions
-3. **`resume_subscription`**: Can resume paused subscriptions
-4. **`withdraw_subscriber_funds`**: Can withdraw remaining balance after cancellation
-5. **Charging**: Existing subscriptions continue to be charged normally (admin/automated charges)
+3. **`withdraw_subscriber_funds`**: Can withdraw remaining balance after cancellation
+4. **Charging**: Existing subscriptions continue to be charged normally (admin/automated charges)
+
+Merchant- or admin-authorized maintenance flows remain subject to their normal authorization rules. The blocklist specifically rejects blocked subscriber-authored mutation paths.
 
 ## Storage Schema
 
@@ -52,9 +57,9 @@ Blocklisted subscribers can still perform the following operations on **existing
 ```rust
 pub struct BlocklistEntry {
     pub subscriber: Address,
-    pub added_by: Address,      // Admin or merchant who added the entry
-    pub added_at: u64,           // Timestamp when added
-    pub reason: Option<String>,  // Optional reason for blocklisting
+    pub added_by: Address,
+    pub added_at: u64,
+    pub reason: Option<String>,
 }
 ```
 
@@ -65,7 +70,7 @@ Blocklist entries are stored with the key pattern:
 (Symbol("blocklist"), subscriber_address) -> BlocklistEntry
 ```
 
-This allows O(1) lookup during subscription creation and deposit operations.
+This allows O(1) lookup during subscription creation, deposit, resume, and migration checks.
 
 ## Events
 
@@ -120,6 +125,7 @@ pub fn add_to_blocklist(
 **Errors**:
 - `Error::Forbidden`: Merchant attempting to blocklist unrelated subscriber
 - `Error::Unauthorized`: Invalid authorization
+- `Error::InvalidInput`: Subscriber is already blocklisted
 
 ### `remove_from_blocklist`
 
@@ -173,14 +179,12 @@ pub fn get_blocklist_entry(
 An admin detects fraudulent activity from a subscriber address:
 
 ```rust
-// Admin blocklists the fraudulent subscriber
 client.add_to_blocklist(
     &admin,
     &fraudulent_subscriber,
     &Some(String::from_str(&env, "Fraudulent chargebacks detected"))
 );
 
-// Subscriber cannot create new subscriptions
 let result = client.try_create_subscription(
     &fraudulent_subscriber,
     &merchant,
@@ -190,10 +194,6 @@ let result = client.try_create_subscription(
     &None
 );
 assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
-
-// But existing subscriptions are preserved
-let existing_sub = client.get_subscription(&existing_sub_id);
-assert_eq!(existing_sub.status, SubscriptionStatus::Active);
 ```
 
 ### 2. Payment Disputes (Merchant)
@@ -201,17 +201,14 @@ assert_eq!(existing_sub.status, SubscriptionStatus::Active);
 A merchant experiences repeated payment disputes with a subscriber:
 
 ```rust
-// Merchant blocklists their problematic subscriber
 client.add_to_blocklist(
     &merchant,
     &subscriber,
     &Some(String::from_str(&env, "Repeated payment disputes"))
 );
 
-// Subscriber cannot create new subscriptions with this merchant
-// But can still manage existing subscription (cancel, withdraw)
-client.cancel_subscription(&sub_id, &subscriber);
-client.withdraw_subscriber_funds(&sub_id, &subscriber);
+let result = client.try_deposit_funds(&sub_id, &subscriber, &amount);
+assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
 ```
 
 ### 3. Regulatory Compliance (Admin)
@@ -219,17 +216,14 @@ client.withdraw_subscriber_funds(&sub_id, &subscriber);
 An admin needs to restrict access for regulatory reasons:
 
 ```rust
-// Admin blocklists for compliance
 client.add_to_blocklist(
     &admin,
     &restricted_subscriber,
     &Some(String::from_str(&env, "Regulatory compliance - sanctioned address"))
 );
 
-// Later, after compliance clearance
 client.remove_from_blocklist(&admin, &restricted_subscriber);
 
-// Subscriber can now create subscriptions again
 let new_sub_id = client.create_subscription(
     &restricted_subscriber,
     &merchant,
@@ -244,17 +238,15 @@ let new_sub_id = client.create_subscription(
 
 ### 1. Existing Subscriptions
 
-**Behavior**: Blocklisting does not affect existing subscriptions. They continue to function normally.
+**Behavior**: Blocklisting does not cancel or confiscate existing subscriptions. Existing subscriptions continue to function for charging and unwind flows, but blocked subscribers cannot use subscriber-authored mutation paths that would create, restore, or reconfigure access.
 
-**Rationale**: Preserves financial obligations and prevents unilateral fund seizure. Merchants and subscribers can still cancel subscriptions through normal flows.
+**Rationale**: Preserves financial obligations and prevents unilateral fund seizure while still cutting off subscriber-controlled access expansion.
 
 ### 2. Multiple Merchants
 
-**Behavior**: If a subscriber is blocklisted by one merchant, they cannot create subscriptions with ANY merchant (including unrelated ones).
+**Behavior**: If a subscriber is blocklisted by one merchant, they cannot create subscriptions with any merchant.
 
 **Rationale**: The blocklist is global at the contract level. Merchant authorization is for adding entries, not for scoping enforcement.
-
-**Workaround**: If merchant-specific blocklisting is needed, merchants should implement their own off-chain filtering before calling the contract.
 
 ### 3. Deposit Restrictions
 
@@ -262,17 +254,19 @@ let new_sub_id = client.create_subscription(
 
 **Rationale**: Prevents blocklisted users from extending their access through top-ups.
 
-**Alternative**: If a blocklisted subscriber needs to top up an existing subscription, they must:
-1. Request removal from blocklist (admin decision)
-2. Or cancel and withdraw, then create a new subscription after removal
+### 4. Resume and Migration Restrictions
 
-### 4. Charging Continues
+**Behavior**: Blocklisted subscribers cannot resume a paused or recoverable subscription and cannot migrate a subscription to a newer plan version until an admin removes the blocklist entry.
+
+**Rationale**: Resuming or migrating materially changes subscription access and commercial terms, so these flows are treated the same as creation and top-up paths.
+
+### 5. Charging Continues
 
 **Behavior**: Existing subscriptions continue to be charged normally even after blocklisting.
 
 **Rationale**: Honors existing financial commitments. If a merchant wants to stop charging, they should cancel the subscription.
 
-### 5. Withdrawal Rights
+### 6. Withdrawal Rights
 
 **Behavior**: Blocklisted subscribers can withdraw remaining balance after cancellation.
 
@@ -289,7 +283,7 @@ let new_sub_id = client.create_subscription(
 ### 2. Storage Efficiency
 
 - Blocklist uses O(1) lookup via direct address key
-- No iteration required during subscription creation or deposits
+- No iteration required during subscription creation, deposit, resume, or migration
 - Minimal gas overhead for blocklist checks
 
 ### 3. Event Transparency
@@ -298,64 +292,55 @@ let new_sub_id = client.create_subscription(
 - Events include reason metadata for audit trails
 - Off-chain systems can monitor blocklist changes
 
-### 4. No Retroactive Enforcement
+### 4. Duplicate Entry Protection
+
+- Adding an already blocklisted subscriber is rejected with `Error::InvalidInput`
+- The original `BlocklistEntry` remains unchanged, preserving `added_by`, `added_at`, and `reason`
+- This prevents accidental audit-trail rewrites before an explicit admin unblock
+
+### 5. No Retroactive Enforcement
 
 - Blocklist does not cancel or modify existing subscriptions
 - Prevents unexpected state changes for active subscriptions
 - Maintains contract predictability
 
-## Governance Recommendations
+## Testing Coverage
+
+The blocklist implementation includes tests covering:
+
+- Admin add and admin-only removal
+- Duplicate add rejection without entry mutation
+- Missing-entry unblock rejection
+- Add/remove event emission and payload verification
+- `None` and empty-string reason variants
+- Enforcement on direct creation, token-specific creation, plan creation, deposit, resume, and plan migration
+- Post-unblock restoration of create, deposit, resume, and migration flows
+
+## Operational Guidance
 
 ### For Admins
 
-1. **Document Blocklist Reasons**: Always provide a reason when blocklisting
-2. **Review Periodically**: Regularly review blocklist entries for removal eligibility
-3. **Communicate Policy**: Publish clear blocklist criteria and appeal process
-4. **Monitor Events**: Track blocklist events for audit and compliance
+1. Document blocklist reasons whenever possible.
+2. Review entries periodically and remove them only after policy review.
+3. Monitor add/remove events to keep an audit trail.
 
 ### For Merchants
 
-1. **Exhaust Alternatives First**: Use blocklist as last resort after other dispute resolution
-2. **Coordinate with Admin**: For serious fraud, escalate to admin for global blocklist
-3. **Document Disputes**: Maintain off-chain records of disputes leading to blocklist
-4. **Consider Impact**: Remember that merchant blocklisting affects all merchants globally
+1. Use the blocklist as a last resort after dispute-resolution steps.
+2. Escalate serious fraud cases to the admin for removal governance and platform-wide tracking.
+3. Remember that merchant-added entries are enforced globally by this contract.
 
 ### For Subscribers
 
-1. **Maintain Good Standing**: Avoid payment disputes and fraudulent activity
-2. **Resolve Disputes**: Work with merchants to resolve issues before blocklisting
-3. **Appeal Process**: Contact admin for blocklist removal if circumstances change
-4. **Existing Rights**: Understand that existing subscriptions remain accessible
-
-## Testing Coverage
-
-The blocklist implementation includes comprehensive tests covering:
-
-- ✅ Admin can add any subscriber to blocklist
-- ✅ Merchant can blocklist their subscribers only
-- ✅ Merchant cannot blocklist unrelated subscribers
-- ✅ Blocklisted subscribers cannot create subscriptions
-- ✅ Blocklisted subscribers cannot create subscriptions from plans
-- ✅ Blocklisted subscribers cannot deposit funds
-- ✅ Existing subscriptions are preserved after blocklisting
-- ✅ Blocklisted subscribers can cancel existing subscriptions
-- ✅ Blocklisted subscribers can withdraw after cancellation
-- ✅ Admin can remove from blocklist
-- ✅ Removed subscribers can create subscriptions again
-- ✅ Non-admin cannot remove from blocklist
-- ✅ Blocklist entry not found returns error
-- ✅ Events are emitted correctly
-- ✅ Multiple subscriptions are preserved
-- ✅ Charging continues for existing subscriptions
-- ✅ Reason metadata is stored correctly
-- ✅ Blocklist without reason works correctly
+1. Appeal blocklist status through the contract admin.
+2. Existing balances are not confiscated, but new subscriber-driven mutations stay blocked until removal.
 
 ## Future Enhancements
 
-Potential future improvements (not in current implementation):
+Potential future improvements:
 
-1. **Merchant-Scoped Blocklist**: Allow merchants to maintain separate blocklists that only affect their own subscriptions
-2. **Temporary Blocklist**: Support time-limited blocklist entries that auto-expire
-3. **Blocklist Categories**: Different blocklist types with different enforcement rules
-4. **Batch Operations**: Bulk add/remove operations for efficiency
-5. **Blocklist Export**: Admin endpoint to export full blocklist for compliance reporting
+1. Merchant-scoped enforcement instead of global enforcement
+2. Temporary blocklist entries with expiry
+3. Categorized blocklist reasons for differentiated policy
+4. Batch add/remove operations
+5. Export tooling for compliance reporting

@@ -19,6 +19,14 @@ pub fn is_blocklisted(env: &Env, subscriber: &Address) -> bool {
     env.storage().instance().has(&key)
 }
 
+/// Reject subscriber-authored mutating flows while the subscriber is blocklisted.
+pub fn require_not_blocklisted(env: &Env, subscriber: &Address) -> Result<(), Error> {
+    if is_blocklisted(env, subscriber) {
+        return Err(Error::SubscriberBlocklisted);
+    }
+    Ok(())
+}
+
 /// Add a subscriber to the blocklist. Admin or merchant only.
 ///
 /// # Arguments
@@ -55,6 +63,10 @@ pub fn do_add_to_blocklist(
     }
 
     let key = blocklist_key(env, &subscriber);
+    if env.storage().instance().has(&key) {
+        return Err(Error::InvalidInput);
+    }
+
     let entry = BlocklistEntry {
         subscriber: subscriber.clone(),
         added_by: authorizer.clone(),
@@ -83,12 +95,7 @@ pub fn do_remove_from_blocklist(
     admin: Address,
     subscriber: Address,
 ) -> Result<(), Error> {
-    admin.require_auth();
-
-    let stored_admin = crate::admin::require_admin(env)?;
-    if admin != stored_admin {
-        return Err(Error::Unauthorized);
-    }
+    crate::admin::require_admin_auth(env, &admin)?;
 
     let key = blocklist_key(env, &subscriber);
     if !env.storage().instance().has(&key) {

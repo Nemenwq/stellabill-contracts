@@ -1,10 +1,10 @@
 //! Billing statement append-only storage, pagination, and compaction.
 
+use crate::safe_math::{safe_add, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, Error,
 };
-use crate::safe_math::{safe_add, safe_sub};
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 const KEY_STATEMENT_NEXT: Symbol = symbol_short!("snext");
@@ -29,6 +29,9 @@ fn aggregate_key(subscription_id: u32) -> (Symbol, u32) {
     (KEY_AGGREGATE, subscription_id)
 }
 
+/// Persist default retention (`keep_recent` detailed rows). Caller must enforce admin auth.
+///
+/// `u32::MAX` means no automatic pruning threshold (keep all detail until overridden at compaction).
 pub fn set_retention_config(env: &Env, keep_recent: u32) {
     env.storage()
         .instance()
@@ -88,8 +91,14 @@ pub fn append_statement(
         kind,
     };
     storage.set(&statement_row_key(subscription_id, next), &statement);
-    storage.set(&next_statement_key(subscription_id), &(safe_add(next as i128, 1).unwrap_or(0) as u32));
-    storage.set(&live_statement_key(subscription_id), &(safe_add(live as i128, 1).unwrap_or(0) as u32));
+    storage.set(
+        &next_statement_key(subscription_id),
+        &(safe_add(next as i128, 1).unwrap_or(0) as u32),
+    );
+    storage.set(
+        &live_statement_key(subscription_id),
+        &(safe_add(live as i128, 1).unwrap_or(0) as u32),
+    );
 }
 
 pub fn get_total_statements(env: &Env, subscription_id: u32) -> u32 {
@@ -162,7 +171,8 @@ pub fn compact_subscription_statements(
     }
 
     let mut aggregate = get_compacted_aggregate(env, subscription_id);
-    aggregate.pruned_count = (safe_add(aggregate.pruned_count as i128, removed as i128).unwrap_or(0)) as u32;
+    aggregate.pruned_count =
+        (safe_add(aggregate.pruned_count as i128, removed as i128).unwrap_or(0)) as u32;
     aggregate.total_amount = safe_add(aggregate.total_amount, amount)?;
     aggregate.totals.interval = safe_add(aggregate.totals.interval, interval_amt)?;
     aggregate.totals.usage = safe_add(aggregate.totals.usage, usage_amt)?;

@@ -45,18 +45,19 @@ pub fn validate_status_transition(
                 | SubscriptionStatus::Cancelled
                 | SubscriptionStatus::InsufficientBalance
                 | SubscriptionStatus::GracePeriod
+                | SubscriptionStatus::Expired
         ),
         SubscriptionStatus::Paused => {
             matches!(
                 to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled
+                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
             )
         }
-        SubscriptionStatus::Cancelled => false,
+        SubscriptionStatus::Cancelled => matches!(to, SubscriptionStatus::Archived),
         SubscriptionStatus::InsufficientBalance => {
             matches!(
                 to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled
+                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
             )
         }
         SubscriptionStatus::GracePeriod => {
@@ -65,8 +66,11 @@ pub fn validate_status_transition(
                 SubscriptionStatus::Active
                     | SubscriptionStatus::Cancelled
                     | SubscriptionStatus::InsufficientBalance
+                    | SubscriptionStatus::Expired
             )
         }
+        SubscriptionStatus::Expired => matches!(to, SubscriptionStatus::Archived),
+        SubscriptionStatus::Archived => false,
     };
 
     if valid {
@@ -86,17 +90,27 @@ pub fn get_allowed_transitions(status: &SubscriptionStatus) -> &'static [Subscri
             SubscriptionStatus::Cancelled,
             SubscriptionStatus::InsufficientBalance,
             SubscriptionStatus::GracePeriod,
+            SubscriptionStatus::Expired,
         ],
-        SubscriptionStatus::Paused => &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled],
-        SubscriptionStatus::Cancelled => &[],
-        SubscriptionStatus::InsufficientBalance => {
-            &[SubscriptionStatus::Active, SubscriptionStatus::Cancelled]
-        }
+        SubscriptionStatus::Paused => &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Cancelled,
+            SubscriptionStatus::Expired,
+        ],
+        SubscriptionStatus::Cancelled => &[SubscriptionStatus::Archived],
+        SubscriptionStatus::InsufficientBalance => &[
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Cancelled,
+            SubscriptionStatus::Expired,
+        ],
         SubscriptionStatus::GracePeriod => &[
             SubscriptionStatus::Active,
             SubscriptionStatus::Cancelled,
             SubscriptionStatus::InsufficientBalance,
+            SubscriptionStatus::Expired,
         ],
+        SubscriptionStatus::Expired => &[SubscriptionStatus::Archived],
+        SubscriptionStatus::Archived => &[],
     }
 }
 

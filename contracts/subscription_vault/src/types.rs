@@ -42,50 +42,8 @@ pub enum DataKey {
 
     BillingStatementsBySubscription(u32),
     BillingStatementsByMerchant(Address),
-    MerchantTokens(Address),
-    MerchantEarnings(Address, Address),
-    UsageLimits(u32),
-    UsageState(u32),
-    MerchantConfig(Address),
-}
-
-/// Accrued totals by charge kind.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    pub interval: i128,
-    pub usage: i128,
-    pub one_off: i128,
-}
-
-/// Merchant token-scoped earnings.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-/// Snapshot for merchant earnings reporting.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReconciliationSnapshot {
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
-}
-
-/// A snapshot tied to a specific token.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
+    TotalAccounted(Address),
+    Recovery(String),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -117,6 +75,10 @@ pub enum SubscriptionStatus {
     InsufficientBalance = 3,
     /// Subscription is in grace period after a missed charge.
     GracePeriod = 4,
+    /// Subscription has automatically expired based on its expiration timestamp.
+    Expired = 5,
+    /// Subscription is archived (reduced storage, read-only).
+    Archived = 6,
 }
 
 /// Stores subscription details and current state.
@@ -158,9 +120,20 @@ pub struct Subscription {
     /// When `lifetime_cap` is `Some(cap)` and `lifetime_charged >= cap`, no
     /// further charges are processed and the subscription transitions to `Cancelled`.
     pub lifetime_charged: i128,
-    /// Timestamp when the current grace period started, if any.
-    /// Used to track grace period duration and expiration.
-    pub grace_start_timestamp: Option<u64>,
+    /// The timestamp when the subscription started.
+    pub start_time: u64,
+    /// The timestamp when the subscription expires. `None` means no expiration.
+    pub expires_at: Option<u64>,
+}
+
+impl Subscription {
+    pub fn is_expired(&self, current_time: u64) -> bool {
+        if let Some(exp) = self.expires_at {
+            current_time >= exp
+        } else {
+            false
+        }
+    }
 }
 
 /// Detailed error information for insufficient balance scenarios.
@@ -195,6 +168,8 @@ pub enum Error {
     Unauthorized = 401,
     /// Caller is authorized but does not have permission for this specific action.
     Forbidden = 403,
+    /// Subscription has expired based on its expires_at timestamp.
+    SubscriptionExpired = 410,
 
     // --- Not Found (404) ---
     /// The requested resource was not found in storage.
@@ -297,6 +272,7 @@ impl Error {
             Error::NotFound => 404,
             Error::Unauthorized => 401,
             Error::Forbidden => 403,
+            Error::SubscriptionExpired => 410,
             Error::IntervalNotElapsed => 1001,
             Error::NotActive => 1002,
             Error::InvalidStatusTransition => 400,
@@ -384,6 +360,8 @@ pub struct SubscriptionSummary {
     pub usage_enabled: bool,
     pub lifetime_cap: Option<i128>,
     pub lifetime_charged: i128,
+    pub start_time: u64,
+    pub expires_at: Option<u64>,
 }
 
 /// Event emitted when subscriptions are exported for migration.
@@ -525,6 +503,9 @@ pub struct BillingCompactionSummary {
 }
 
 /// Event emitted when statement compaction executes.
+///
+/// `aggregate_*` fields mirror [`BillingStatementAggregate`] after this run so indexers can
+/// verify on-chain totals without a follow-up `get_stmt_compacted_aggregate` call (optional).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct BillingCompactedEvent {
@@ -534,6 +515,10 @@ pub struct BillingCompactedEvent {
     pub kept_count: u32,
     pub total_pruned_amount: i128,
     pub timestamp: u64,
+    pub aggregate_pruned_count: u32,
+    pub aggregate_total_amount: i128,
+    pub aggregate_oldest_period_start: Option<u64>,
+    pub aggregate_newest_period_end: Option<u64>,
 }
 
 /// Optional oracle pricing configuration for cross-currency plans.
@@ -593,12 +578,14 @@ pub struct EmergencyStopDisabledEvent {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryReason {
-    /// Funds sent to contract address by mistake.
-    AccidentalTransfer = 0,
-    /// Funds from deprecated contract flows or logic errors.
-    DeprecatedFlow = 1,
-    /// Funds from cancelled subscriptions with unreachable addresses.
-    UnreachableSubscriber = 2,
+    /// Overpayment by user, e.g. sending tokens directly to the contract.
+    UserOverpayment = 0,
+    /// Transfer failed or stalled in an unexpected state.
+    FailedTransfer = 1,
+    /// Escrow expired or subscription cancelled with unreachable user.
+    ExpiredEscrow = 2,
+    /// System or logic correction.
+    SystemCorrection = 3,
 }
 
 /// Event emitted when admin recovers stranded funds.
@@ -607,6 +594,7 @@ pub enum RecoveryReason {
 pub struct RecoveryEvent {
     pub admin: Address,
     pub recipient: Address,
+    pub token: Address,
     pub amount: i128,
     pub reason: RecoveryReason,
     pub timestamp: u64,
@@ -622,6 +610,7 @@ pub struct SubscriptionCreatedEvent {
     pub amount: i128,
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
+    pub expires_at: Option<u64>,
 }
 
 /// Event emitted when funds are deposited into a subscription vault.
@@ -693,6 +682,22 @@ pub struct SubscriptionPausedEvent {
 pub struct SubscriptionResumedEvent {
     pub subscription_id: u32,
     pub authorizer: Address,
+}
+
+/// Event emitted when a subscription is automatically expired.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionExpiredEvent {
+    pub subscription_id: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a subscription is archived.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionArchivedEvent {
+    pub subscription_id: u32,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a merchant withdraws funds.

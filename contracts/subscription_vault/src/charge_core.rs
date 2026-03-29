@@ -18,8 +18,8 @@ use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, ChargeExecutionResult, DataKey, Error, FundsDepositedEvent,
-    LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
+    LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+    SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 
@@ -34,7 +34,6 @@ fn idem_key(subscription_id: u32) -> (Symbol, u32) {
     (KEY_IDEM, subscription_id)
 }
 
-
 /// Performs a single interval-based charge with optional replay protection.
 pub fn charge_one(
     env: &Env,
@@ -43,10 +42,22 @@ pub fn charge_one(
     idempotency_key: Option<soroban_sdk::BytesN<32>>,
 ) -> Result<ChargeExecutionResult, Error> {
     let mut sub = get_subscription(env, subscription_id)?;
-    let merchant = sub.merchant.clone();
-
-    if crate::merchant::get_merchant_paused(env, merchant.clone()) {
-        return Err(Error::MerchantPaused);
+    
+    // Expiration guard
+    if sub.is_expired(now) {
+        if sub.status != SubscriptionStatus::Expired {
+            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
+            sub.status = SubscriptionStatus::Expired;
+            env.storage().instance().set(&subscription_id, &sub);
+            env.events().publish(
+                (Symbol::new(env, "subscription_expired"), subscription_id),
+                crate::types::SubscriptionExpiredEvent {
+                    subscription_id,
+                    timestamp: now,
+                },
+            );
+        }
+        return Err(Error::SubscriptionExpired);
     }
 
     let charge_amount = crate::oracle::resolve_charge_amount(env, &sub)?;
@@ -248,6 +259,24 @@ pub fn charge_usage_one(
         return Err(Error::MerchantPaused);
     }
 
+    let now = env.ledger().timestamp();
+    // Expiration guard
+    if sub.is_expired(now) {
+        if sub.status != SubscriptionStatus::Expired {
+            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
+            sub.status = SubscriptionStatus::Expired;
+            env.storage().instance().set(&subscription_id, &sub);
+            env.events().publish(
+                (Symbol::new(env, "subscription_expired"), subscription_id),
+                crate::types::SubscriptionExpiredEvent {
+                    subscription_id,
+                    timestamp: now,
+                },
+            );
+        }
+        return Err(Error::SubscriptionExpired);
+    }
+
     if sub.status != SubscriptionStatus::Active {
         return Err(Error::NotActive);
     }
@@ -267,8 +296,12 @@ pub fn charge_usage_one(
     // -- Replay protection (Reference-based) ----------------------------------
     // We use the reference as a unique idempotency key for usage charges.
     // If the reference has been seen before for this subscription, we return Replay.
-    let ref_key = (Symbol::new(env, "usage_ref"), subscription_id, reference.clone());
-    
+    let ref_key = (
+        Symbol::new(env, "usage_ref"),
+        subscription_id,
+        reference.clone(),
+    );
+
     if env.storage().instance().has(&ref_key) {
         return Err(Error::Replay);
     }
@@ -277,16 +310,20 @@ pub fn charge_usage_one(
     let now = env.ledger().timestamp();
     let limits_key = DataKey::UsageLimits(subscription_id);
     let maybe_limits: Option<UsageLimits> = env.storage().instance().get(&limits_key);
-    
+
     if let Some(limits) = maybe_limits {
         let state_key = DataKey::UsageState(subscription_id);
-        let mut state = env.storage().instance().get(&state_key).unwrap_or(UsageState {
-            last_usage_timestamp: 0,
-            window_start_timestamp: now,
-            window_call_count: 0,
-            current_period_usage_units: 0,
-            period_index: now / sub.interval_seconds,
-        });
+        let mut state = env
+            .storage()
+            .instance()
+            .get(&state_key)
+            .unwrap_or(UsageState {
+                last_usage_timestamp: 0,
+                window_start_timestamp: now,
+                window_call_count: 0,
+                current_period_usage_units: 0,
+                period_index: now / sub.interval_seconds,
+            });
 
         // 1. Burst protection
         if limits.burst_min_interval_secs > 0 {
@@ -298,7 +335,11 @@ pub fn charge_usage_one(
 
         // 2. Rate limit (sliding window approximate)
         if let Some(max_calls) = limits.rate_limit_max_calls {
-            if now >= state.window_start_timestamp.saturating_add(limits.rate_window_secs) {
+            if now
+                >= state
+                    .window_start_timestamp
+                    .saturating_add(limits.rate_window_secs)
+            {
                 state.window_start_timestamp = now;
                 state.window_call_count = 0;
             }
@@ -314,7 +355,11 @@ pub fn charge_usage_one(
                 state.period_index = current_period;
                 state.current_period_usage_units = 0;
             }
-            if state.current_period_usage_units.saturating_add(usage_amount) > cap_units {
+            if state
+                .current_period_usage_units
+                .saturating_add(usage_amount)
+                > cap_units
+            {
                 return Err(Error::UsageCapExceeded);
             }
         }
@@ -322,7 +367,9 @@ pub fn charge_usage_one(
         // Update state
         state.last_usage_timestamp = now;
         state.window_call_count = state.window_call_count.saturating_add(1);
-        state.current_period_usage_units = state.current_period_usage_units.saturating_add(usage_amount);
+        state.current_period_usage_units = state
+            .current_period_usage_units
+            .saturating_add(usage_amount);
         env.storage().instance().set(&state_key, &state);
     }
 
