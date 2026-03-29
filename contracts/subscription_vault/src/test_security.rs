@@ -41,8 +41,7 @@ fn create_security_subscription(
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     (id, subscriber, merchant)
 }
 

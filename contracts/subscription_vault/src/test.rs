@@ -882,7 +882,7 @@ fn test_subscription_struct_status_field() {
         prepaid_balance: 500_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -904,7 +904,7 @@ fn test_subscription_struct_with_lifetime_cap() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: Some(cap),
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -1124,8 +1124,7 @@ fn test_deposit_funds_basic() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env.client.deposit_funds(&id, &subscriber, &5_000_000);
     assertions::assert_prepaid_balance(&test_env.client, &id, 5_000_000);
 }
@@ -1170,10 +1169,8 @@ fn test_deposit_funds_event_payload() {
         &INTERVAL,
         &false,
         &None::<i128>,
-     &None::<u64>);
-    // min_topup is 1_000_000; try to deposit 500
-    client.deposit_funds(&id, &subscriber, &500);
-}
+        &None::<u64>
+    );
 
     client.deposit_funds(&id, &subscriber, &15_000_000);
 
@@ -1216,10 +1213,8 @@ fn test_deposit_funds_cei_compliance() {
         &INTERVAL,
         &false,
         &None::<i128>,
-     &None::<u64>);
-}
-
-// -- Batch charge tests -------------------------------------------------------
+        &None::<u64>
+    );
 
     let initial_contract_balance = token_client.balance(&client.address);
     let deposit_amount = 20_000_000i128;
@@ -1249,8 +1244,7 @@ fn test_deposit_funds_below_minimum() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     // min_topup is 1_000_000; try to deposit 500
     test_env.client.deposit_funds(&id, &subscriber, &500);
 }
@@ -1347,22 +1341,20 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env.client.pause_subscription(&direct_sub, &subscriber);
 
     let plan_v1 =
         test_env
             .client
-            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     let plan_v2 = test_env.client.update_plan_template(
         &merchant,
         &plan_v1,
         &(AMOUNT + 1_000_000),
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let plan_sub = test_env
         .client
         .create_subscription_from_plan(&subscriber, &plan_v1);
@@ -1380,8 +1372,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
             &AMOUNT,
             &INTERVAL,
             &false,
-            &None::<i128>,
-        ),
+            &None::<i128>, &None::<u64>),
         Err(Ok(Error::SubscriberBlocklisted))
     );
     assert_eq!(
@@ -1392,8 +1383,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
             &AMOUNT,
             &INTERVAL,
             &false,
-            &None::<i128>,
-        ),
+            &None::<i128>, &None::<u64>),
         Err(Ok(Error::SubscriberBlocklisted))
     );
     assert_eq!(
@@ -1431,8 +1421,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&plan_sub, &subscriber, &5_000_000i128);
@@ -1505,8 +1494,7 @@ fn test_create_subscription_blocked_by_emergency_stop() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 }
 
 // -- Batch charge tests -------------------------------------------------------
@@ -2169,7 +2157,7 @@ fn test_compute_next_charge_info_active() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2190,7 +2178,7 @@ fn test_compute_next_charge_info_paused() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2211,7 +2199,7 @@ fn test_compute_next_charge_info_cancelled() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2231,7 +2219,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         prepaid_balance: 1_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2252,7 +2240,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         prepaid_balance: 100_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -2288,7 +2276,7 @@ fn test_next_charge_info_cross_check_status_gating() {
     for id in [id_paused, id_cancelled, id_insufficient, id_grace] {
         seed_balance(&env, &client, id, PREPAID);
     }
-
+}
 
 
 // -- Top-up estimation (precision) --------------------------------------------
@@ -2388,7 +2376,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         prepaid_balance: 100_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0,
+        lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
         grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
@@ -2523,7 +2511,7 @@ fn test_plan_template_no_cap_creates_uncapped_sub() {
     let plan_id =
         test_env
             .client
-            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     let plan = test_env.client.get_plan_template(&plan_id);
     assert_eq!(plan.amount, AMOUNT);
 
@@ -2544,7 +2532,7 @@ fn test_plan_max_concurrent_subscriptions_enforced_per_subscriber() {
     let plan_id =
         test_env
             .client
-            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
 
     // Limit each subscriber to a single active subscription for this plan.
     test_env
@@ -2578,7 +2566,7 @@ fn test_plan_max_concurrent_allows_new_after_cancellation() {
     let plan_id =
         test_env
             .client
-            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     test_env
         .client
         .set_plan_max_active_subs(&merchant, &plan_id, &1);
@@ -2811,8 +2799,7 @@ fn test_partial_refund_repeated_debits_are_cumulative() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&sub_id, &subscriber, &30_000_000i128);
@@ -2844,8 +2831,7 @@ fn test_partial_refund_cumulative_exact_drain_then_over_refund_fails() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&sub_id, &subscriber, &10_000_000i128);
@@ -2882,8 +2868,7 @@ fn test_partial_refund_full_balance_as_partial_succeeds() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&sub_id, &subscriber, &20_000_000i128);
@@ -2912,8 +2897,7 @@ fn test_partial_refund_after_cancellation_succeeds() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&sub_id, &subscriber, &15_000_000i128);
@@ -2945,8 +2929,7 @@ fn test_partial_refund_emits_event() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&sub_id, &subscriber, &10_000_000i128);
@@ -3052,14 +3035,13 @@ fn test_migrate_subscription_rejects_cross_template_family() {
     let plan_family_a =
         test_env
             .client
-            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+            .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     let plan_family_b = test_env.client.create_plan_template(
         &merchant,
         &(AMOUNT * 2),
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 
     let sub_id = test_env
         .client
@@ -3097,8 +3079,7 @@ fn test_cancel_from_various_states() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env.client.pause_subscription(&id2, &subscriber);
     test_env.client.cancel_subscription(&id2, &subscriber);
     assertions::assert_status(&test_env.client, &id2, SubscriptionStatus::Cancelled);
@@ -3170,8 +3151,7 @@ fn test_cancel_and_withdraw_events() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env.client.deposit_funds(&id, &subscriber, &5_000_000);
 
     test_env.client.cancel_subscription(&id, &subscriber);
@@ -3280,8 +3260,7 @@ fn test_charge_usage_basic() {
         &AMOUNT,
         &INTERVAL,
         &true,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     fixtures::seed_balance(&test_env.env, &test_env.client, id, PREPAID);
 
     test_env.client.charge_usage(&id, &1_000_000);
@@ -3482,8 +3461,7 @@ fn test_billing_lifecycle_golden_path_end_to_end() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let created = test_env.client.get_subscription(&id);
     assert_eq!(created.status, SubscriptionStatus::Active);
     assert_eq!(created.prepaid_balance, 0);
@@ -3608,8 +3586,7 @@ fn test_billing_lifecycle_delayed_charge_and_min_topup_progression() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &19_000_000i128);
@@ -3688,16 +3665,14 @@ fn test_list_subscriptions_by_subscriber() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let id2 = test_env.client.create_subscription(
         &subscriber,
         &merchant,
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 
     let page = test_env
         .client
@@ -3731,8 +3706,7 @@ fn test_list_subscriptions_by_subscriber_pagination_stable_ordering() {
             &AMOUNT,
             &INTERVAL,
             &false,
-            &None::<i128>,
-        );
+            &None::<i128>, &None::<u64>);
         expected.push(id);
     }
 
@@ -3764,8 +3738,7 @@ fn test_get_subscriptions_by_merchant_pagination_and_invalid_limit() {
             &AMOUNT,
             &INTERVAL,
             &false,
-            &None::<i128>,
-        );
+            &None::<i128>, &None::<u64>);
     }
     assert_eq!(
         test_env.client.get_merchant_subscription_count(&merchant),
@@ -3811,8 +3784,7 @@ fn test_get_subscriptions_by_token_pagination_and_count() {
             &AMOUNT,
             &INTERVAL,
             &false,
-            &None::<i128>,
-        );
+            &None::<i128>, &None::<u64>);
     }
     assert_eq!(
         test_env
@@ -3852,8 +3824,7 @@ fn test_withdraw_subscriber_funds_after_cancel() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env.client.deposit_funds(&id, &subscriber, &5_000_000);
     test_env.client.cancel_subscription(&id, &subscriber);
 
@@ -4545,8 +4516,7 @@ fn test_compaction_idempotent_second_run() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &500_000_000i128);
@@ -4593,8 +4563,7 @@ fn test_compaction_keep_recent_zero_prunes_all_detail() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &100_000_000i128);
@@ -4643,8 +4612,7 @@ fn test_compact_billing_statements_non_admin_rejected() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let attacker = Address::generate(&test_env.env);
     let res = test_env
         .client
@@ -4688,8 +4656,7 @@ fn test_compaction_override_respects_per_run_threshold() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &500_000_000i128);
@@ -4789,8 +4756,7 @@ fn test_create_subscription_with_unaccepted_token_fails() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
@@ -4805,8 +4771,7 @@ fn test_create_subscription_zero_amount_rejected() {
         &0i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
@@ -4821,8 +4786,7 @@ fn test_create_subscription_interval_too_small_rejected() {
         &1_000_000i128,
         &59u64,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
@@ -4857,8 +4821,7 @@ fn test_create_subscription_blocklisted_subscriber_rejected() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
 }
 
@@ -4874,8 +4837,7 @@ fn test_create_subscription_with_token_zero_amount_rejected() {
         &0i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
@@ -4891,8 +4853,7 @@ fn test_create_subscription_with_token_interval_too_small_rejected() {
         &1_000_000i128,
         &59u64,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
@@ -4929,8 +4890,7 @@ fn test_create_subscription_with_token_blocklisted_subscriber_rejected() {
         &1_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     assert_eq!(result, Err(Ok(Error::SubscriberBlocklisted)));
 }
 
@@ -5199,8 +5159,7 @@ fn test_admin_rotation_does_not_affect_subscriptions() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let before = test_env.client.get_subscription(&id);
 
     let new_admin = Address::generate(&test_env.env);
@@ -6370,24 +6329,21 @@ fn test_shared_merchant_multiple_states() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let id_b = test_env.client.create_subscription(
         &sub_b_sub,
         &merchant,
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     let id_c = test_env.client.create_subscription(
         &sub_c_sub,
         &merchant,
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 
     // Set: A stays Active, B => Paused, C => Cancelled.
     test_env.client.pause_subscription(&id_b, &sub_b_sub);
@@ -6426,14 +6382,14 @@ fn test_pause_with_varying_intervals() {
 
     let id1 = test_env
         .client
-        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>);
+        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>, &None::<u64>);
     let id2 = test_env
         .client
-        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>);
+        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>, &None::<u64>);
     let id3 =
         test_env
             .client
-            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>);
+            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>, &None::<u64>);
 
     // All three should pause without error regardless of interval.
     test_env.client.pause_subscription(&id1, &s1);
@@ -6600,8 +6556,7 @@ fn setup_oracle_env<'a>(
         &20_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &200_000_000i128);
     (id, subscriber, merchant, oracle)
 }
@@ -6673,8 +6628,7 @@ fn test_oracle_disabled_charge_uses_subscription_amount_directly() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &50_000_000i128);
@@ -6779,8 +6733,7 @@ fn test_oracle_price_exactly_at_max_age_boundary_accepted() {
         &20_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
@@ -6827,8 +6780,7 @@ fn test_oracle_price_one_second_past_max_age_rejected() {
         &20_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &200_000_000i128);
@@ -6877,8 +6829,7 @@ fn test_oracle_enabled_no_address_stored_returns_not_configured() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env
         .client
         .deposit_funds(&id, &subscriber, &50_000_000i128);
@@ -7062,7 +7013,7 @@ mod storage_layout {
             prepaid_balance: 50_000_000,
             usage_enabled: false,
             lifetime_cap: Some(120_000_000),
-            lifetime_charged: 10_000_000,
+            lifetime_charged: 10_000_000, start_time: 0, expires_at: None, grace_start_timestamp: None,
             grace_start_timestamp: None,
         };
 
@@ -7103,8 +7054,7 @@ mod storage_layout {
             &AMOUNT,
             &INTERVAL,
             &false,
-            &None::<i128>,
-        );
+            &None::<i128>, &None::<u64>);
 
         let sub = client.get_subscription(&id);
         assert_eq!(sub.lifetime_cap, None);
@@ -7163,7 +7113,7 @@ mod storage_layout {
             prepaid_balance: PREPAID,
             usage_enabled: false,
             lifetime_cap: None,
-            lifetime_charged: 0,
+            lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
             grace_start_timestamp: None,
         };
 
@@ -7329,8 +7279,7 @@ fn test_merchant_token_bucket_reconciliation() {
         &5_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 
     let id_b = client.create_subscription_with_token(
         &subscriber_b,
@@ -7339,8 +7288,7 @@ fn test_merchant_token_bucket_reconciliation() {
         &7_000_000i128,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 
     client.deposit_funds(&id_a, &subscriber_a, &20_000_000i128);
     client.deposit_funds(&id_b, &subscriber_b, &20_000_000i128);
@@ -7599,8 +7547,7 @@ fn test_event_schema_consistency() {
         &AMOUNT,
         &INTERVAL,
         &true,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
 
     let events = test_env.env.events().all();
     assert!(!events.is_empty());
@@ -7623,8 +7570,7 @@ fn test_oneoff_unauthorized_merchant_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     // Imposter (different merchant) must be rejected
@@ -7650,8 +7596,7 @@ fn test_oneoff_zero_amount_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     let res = client.try_charge_one_off(&id, &merchant, &0i128);
@@ -7672,8 +7617,7 @@ fn test_oneoff_negative_amount_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     let res = client.try_charge_one_off(&id, &merchant, &-1i128);
@@ -7694,8 +7638,7 @@ fn test_oneoff_exceeds_balance_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     // Attempt to charge more than balance
@@ -7721,8 +7664,7 @@ fn test_oneoff_exact_balance_succeeds() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     // Charge exactly the full balance
@@ -7746,8 +7688,7 @@ fn test_oneoff_on_paused_subscription_succeeds() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
     client.pause_subscription(&id, &subscriber);
 
@@ -7773,8 +7714,7 @@ fn test_oneoff_on_cancelled_subscription_rejected() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
     client.cancel_subscription(&id, &subscriber);
 
@@ -7796,8 +7736,7 @@ fn test_oneoff_partial_balance_boundary() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &10_000_000i128);
 
     // Charge leaving exactly 1 unit remaining
@@ -7831,8 +7770,7 @@ fn test_oneoff_blocked_by_emergency_stop() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     // Enable emergency stop
@@ -7862,8 +7800,7 @@ fn test_oneoff_statement_kind_consistency() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     client.charge_one_off(&id, &merchant, &7_000_000i128);
@@ -7896,8 +7833,7 @@ fn test_oneoff_event_emitted() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     client.charge_one_off(&id, &merchant, &3_000_000i128);
@@ -7954,8 +7890,7 @@ fn test_oneoff_does_not_update_last_payment_timestamp() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
 
     let sub_before = client.get_subscription(&id);
@@ -7984,8 +7919,7 @@ fn test_compaction_aggregation_accuracy() {
         &10_000_000i128, // 10 USDC
         &INTERVAL,
         &true, // usage enabled
-        &None::<i128>,
-    );
+        &None::<i128>, &None::<u64>);
     test_env.client.deposit_funds(&id, &subscriber, &500_000_000i128);
 
     // 1. Add mixed charges

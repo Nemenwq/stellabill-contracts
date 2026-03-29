@@ -183,8 +183,7 @@ fn test_state_consistency() {
         &10_000_000,
         &INTERVAL,
         &false,
-        &None,
-    );
+        &None, &None::<u64>);
     
     client.deposit_funds(&sub_id, &subscriber, &50_000_000);
     

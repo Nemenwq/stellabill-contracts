@@ -43,8 +43,7 @@ fn setup_multi_actor_env() -> MultiActorSetup {
             &BATCH_AMOUNT,
             &BATCH_INTERVAL,
             &false,
-            &None,
-        );
+            &None, &None::<u64>);
         test_env
             .client
             .deposit_funds(&sub_id, &subscribers[*s_idx], &DEPOSIT_AMOUNT);
