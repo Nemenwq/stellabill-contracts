@@ -2287,7 +2287,12 @@ fn test_next_charge_info_cross_check_status_gating() {
         seed_balance(&env, &client, id, PREPAID);
     }
 
-
+    // Cross-check gating: none of these statuses should allow charging
+    assert_eq!(client.try_charge_subscription(&id_paused), Err(Ok(Error::NotActive)));
+    assert_eq!(client.try_charge_subscription(&id_cancelled), Err(Ok(Error::NotActive)));
+    assert_eq!(client.try_charge_subscription(&id_insufficient), Err(Ok(Error::InsufficientBalance)));
+    assert_eq!(client.try_charge_subscription(&id_grace), Err(Ok(Error::NotActive)));
+}
 
 // -- Top-up estimation (precision) --------------------------------------------
 
