@@ -1170,11 +1170,9 @@ fn test_deposit_funds_event_payload() {
         &INTERVAL,
         &false,
         &None::<i128>,
-     &None::<u64>);
-    // min_topup is 1_000_000; try to deposit 500
-    client.deposit_funds(&id, &subscriber, &500);
-}
-
+        &None::<u64>,
+    );
+    
     client.deposit_funds(&id, &subscriber, &15_000_000);
 
     let events = env.events().all();
