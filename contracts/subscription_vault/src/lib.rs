@@ -71,6 +71,7 @@
 //! - `docs/subscription_metadata.md`
 
 // ── Modules ──────────────────────────────────────────────────────────────────
+mod accounting;
 mod admin;
 mod blocklist;
 mod charge_core;
@@ -84,6 +85,7 @@ pub mod safe_math;
 mod state_machine;
 mod statements;
 mod subscription;
+mod types;
 #[cfg(test)]
 mod test;
 #[cfg(test)]

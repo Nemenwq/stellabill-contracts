@@ -44,6 +44,19 @@ pub enum DataKey {
     BillingStatementsByMerchant(Address),
     TotalAccounted(Address),
     Recovery(String),
+    
+    /// Usage limits for a subscription.
+    UsageLimits(u32),
+    /// Usage state for a subscription.
+    UsageState(u32),
+    /// Merchant configuration.
+    MerchantConfig(Address),
+    /// Merchant earnings by token.
+    MerchantEarnings(Address, Address),
+    /// List of tokens a merchant has earnings in.
+    MerchantTokens(Address),
+    /// Blocklist entries.
+    Blocklist(Address),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -479,6 +492,46 @@ pub struct BillingStatementsPage {
 pub struct BillingRetentionConfig {
     /// Number of most-recent detailed rows to keep per subscription.
     pub keep_recent: u32,
+}
+
+/// Accrued totals by charge kind.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccruedTotals {
+    /// Total from interval charges.
+    pub interval: i128,
+    /// Total from usage charges.
+    pub usage: i128,
+    /// Total from one-off charges.
+    pub one_off: i128,
+}
+
+/// Merchant earnings by token.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenEarnings {
+    /// Accumulated earnings by charge kind.
+    pub accruals: AccruedTotals,
+    /// Total amount withdrawn by merchant.
+    pub withdrawals: i128,
+    /// Total amount refunded to subscribers.
+    pub refunds: i128,
+}
+
+/// Token reconciliation snapshot for merchant.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationSnapshot {
+    /// Token address.
+    pub token: Address,
+    /// Total accrued earnings from all charge kinds.
+    pub total_accruals: i128,
+    /// Total amount withdrawn.
+    pub total_withdrawals: i128,
+    /// Total amount refunded.
+    pub total_refunds: i128,
+    /// Computed balance: accruals - withdrawals - refunds.
+    pub computed_balance: i128,
 }
 
 /// Aggregated compacted history for pruned rows.

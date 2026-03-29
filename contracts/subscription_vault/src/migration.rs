@@ -56,6 +56,8 @@ impl MigrationContract {
                     usage_enabled: sub.usage_enabled,
                     lifetime_cap: sub.lifetime_cap,
                     lifetime_charged: sub.lifetime_charged,
+                    start_time: sub.start_time,
+                    expires_at: sub.expires_at,
                 };
                 results.push_back(summary);
                 collected_count += 1;

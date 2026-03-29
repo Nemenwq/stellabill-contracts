@@ -626,7 +626,7 @@ pub fn do_charge_one_off(
         BillingChargeKind::OneOff,
         env.ledger().timestamp(),
         env.ledger().timestamp(),
-    );
+    )?;
 
     env.events().publish(
         (Symbol::new(env, "oneoff_ch"), subscription_id),
@@ -714,13 +714,14 @@ pub fn do_withdraw_subscriber_funds(
     sub.prepaid_balance = 0;
     env.storage().instance().set(&subscription_id, &sub);
 
-        token_client.transfer(
-            &env.current_contract_address(),
-            &subscriber,
-            &amount_to_refund,
-        );
-        crate::accounting::sub_total_accounted(env, &token_addr, amount_to_refund)?;
-    }
+    let token_addr = sub.token.clone();
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+    token_client.transfer(
+        &env.current_contract_address(),
+        &subscriber,
+        &amount_to_refund,
+    );
+    crate::accounting::sub_total_accounted(env, &token_addr, amount_to_refund)?;
 
     Ok(())
 }
@@ -770,7 +771,7 @@ pub fn do_partial_refund(
     // Interactions: transfer refund from vault to subscriber.
     let token_client = soroban_sdk::token::Client::new(env, &sub.token);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
 
     env.events().publish(
         (Symbol::new(env, "partial_refund"), subscription_id),
