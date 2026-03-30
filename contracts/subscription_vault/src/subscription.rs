@@ -712,8 +712,9 @@ pub fn do_withdraw_subscriber_funds(
     }
 
     sub.prepaid_balance = 0;
-    env.storage().instance().set(&subscription_id, &sub);
-
+env.storage().instance().set(&subscription_id, &sub);
+    if let Ok(token_addr) = crate::admin::get_token(env) {
+        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
         token_client.transfer(
             &env.current_contract_address(),
             &subscriber,

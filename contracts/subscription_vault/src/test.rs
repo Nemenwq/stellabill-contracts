@@ -8033,3 +8033,168 @@ fn test_compaction_aggregation_accuracy() {
 }
 
 
+
+// ── Protocol Fee Tests ────────────────────────────────────────────────────────
+
+fn fund_subscription(
+    env: &Env,
+    client: &SubscriptionVaultClient,
+    token: &Address,
+    _admin: &Address,
+    sub_id: u32,
+    subscriber: &Address,
+    amount: i128,
+) {
+    let asset_client = soroban_sdk::token::StellarAssetClient::new(env, token);
+    asset_client.mint(subscriber, &amount);
+    client.deposit_funds(&sub_id, subscriber, &amount);
+}
+
+fn setup_fee_env() -> (
+    Env,
+    SubscriptionVaultClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    u32,
+) {
+    let (env, client, token, admin) = setup_test_env();
+    let treasury = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    env.ledger().set_timestamp(T0);
+    fund_subscription(&env, &client, &token, &admin, sub_id, &subscriber, PREPAID);
+    (env, client, token, admin, treasury, subscriber, merchant, sub_id)
+}
+
+#[test]
+fn test_protocol_fee_default_is_zero() {
+    let (_env, client, _token, _admin) = setup_test_env();
+    assert_eq!(client.get_protocol_fee_bps(), 0);
+}
+
+#[test]
+fn test_set_protocol_fee_stores_bps() {
+    let (env, client, _token, admin) = setup_test_env();
+    let treasury = Address::generate(&env);
+    client.set_protocol_fee(&admin, &treasury, &500u32);
+    assert_eq!(client.get_protocol_fee_bps(), 500);
+}
+
+#[test]
+fn test_set_protocol_fee_rejects_above_10000() {
+    let (env, client, _token, admin) = setup_test_env();
+    let treasury = Address::generate(&env);
+    let result = client.try_set_protocol_fee(&admin, &treasury, &10_001u32);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_protocol_fee_allows_exactly_10000() {
+    let (env, client, _token, admin) = setup_test_env();
+    let treasury = Address::generate(&env);
+    client.set_protocol_fee(&admin, &treasury, &10_000u32);
+    assert_eq!(client.get_protocol_fee_bps(), 10_000);
+}
+
+#[test]
+fn test_set_protocol_fee_allows_zero() {
+    let (env, client, _token, admin) = setup_test_env();
+    let treasury = Address::generate(&env);
+    client.set_protocol_fee(&admin, &treasury, &0u32);
+    assert_eq!(client.get_protocol_fee_bps(), 0);
+}
+
+#[test]
+fn test_fee_off_merchant_receives_full_amount() {
+    let (env, client, token, _admin, _treasury, _subscriber, merchant, sub_id) =
+        setup_fee_env();
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&sub_id);
+    let balance = client.get_merchant_balance_by_token(&merchant, &token);
+    assert_eq!(balance, AMOUNT);
+}
+
+#[test]
+fn test_fee_on_splits_correctly() {
+    let (env, client, token, admin, treasury, _subscriber, merchant, sub_id) =
+        setup_fee_env();
+    client.set_protocol_fee(&admin, &treasury, &500u32);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&sub_id);
+    let expected_fee = AMOUNT * 500 / 10_000;
+    let expected_net = AMOUNT - expected_fee;
+    let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+    assert_eq!(merchant_bal, expected_net);
+    assert_eq!(treasury_bal, expected_fee);
+    assert_eq!(merchant_bal + treasury_bal, AMOUNT);
+}
+
+#[test]
+fn test_fee_conservation_various_bps() {
+    for bps in [1u32, 100, 250, 999, 5000, 9999, 10_000] {
+        let (env, client, token, admin, treasury, _subscriber, merchant, sub_id) =
+            setup_fee_env();
+        client.set_protocol_fee(&admin, &treasury, &bps);
+        env.ledger().set_timestamp(T0 + INTERVAL);
+        client.charge_subscription(&sub_id);
+        let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+        let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+        assert_eq!(
+            merchant_bal + treasury_bal,
+            AMOUNT,
+            "Conservation failed for bps={bps}"
+        );
+    }
+}
+
+#[test]
+fn test_fee_tiny_amount_no_panic() {
+    let (env, client, token, admin, treasury, subscriber, merchant, _) = setup_fee_env();
+    let tiny_amount = 1i128;
+    let sub_id2 = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &tiny_amount,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+    );
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &1_000_000i128);
+    client.deposit_funds(&sub_id2, &subscriber, &1_000_000i128);
+    client.set_protocol_fee(&admin, &treasury, &500u32);
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&sub_id2);
+    let merchant_bal = client.get_merchant_balance_by_token(&merchant, &token);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+    assert_eq!(merchant_bal + treasury_bal, tiny_amount);
+}
+
+#[test]
+fn test_fee_treasury_receives_nothing_when_fee_zero() {
+    let (env, client, token, _admin, treasury, _subscriber, _merchant, sub_id) =
+        setup_fee_env();
+    env.ledger().set_timestamp(T0 + INTERVAL);
+    client.charge_subscription(&sub_id);
+    let treasury_bal = client.get_merchant_balance_by_token(&treasury, &token);
+    assert_eq!(treasury_bal, 0);
+}
+
+#[test]
+fn test_fee_configured_bps_stored_correctly() {
+    let (env, client, _token, admin) = setup_test_env();
+    let treasury = Address::generate(&env);
+    client.set_protocol_fee(&admin, &treasury, &300u32);
+    assert_eq!(client.get_protocol_fee_bps(), 300u32);
+}

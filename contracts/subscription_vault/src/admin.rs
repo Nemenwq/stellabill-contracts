@@ -306,3 +306,52 @@ pub fn do_recover_stranded_funds(
 
     Ok(())
 }
+
+// ── Protocol fee helpers ──────────────────────────────────────────────────────
+
+/// Set protocol fee basis points and treasury address. Admin only.
+///
+/// fee_bps must be in 0..=10_000. Setting fee_bps to 0 disables fee collection.
+pub fn set_protocol_fee(
+    env: &Env,
+    admin: Address,
+    treasury: Address,
+    fee_bps: u32,
+) -> Result<(), crate::types::Error> {
+    admin.require_auth();
+    let stored = require_admin(env)?;
+    if admin != stored {
+        return Err(crate::types::Error::Forbidden);
+    }
+    if fee_bps > 10_000 {
+        return Err(crate::types::Error::InvalidInput);
+    }
+    let storage = env.storage().instance();
+    storage.set(&Symbol::new(env, "fee_bps"), &fee_bps);
+    storage.set(&Symbol::new(env, "treasury"), &treasury);
+    env.events().publish(
+        (Symbol::new(env, "protocol_fee_configured"),),
+        crate::types::ProtocolFeeConfiguredEvent {
+            admin,
+            treasury,
+            fee_bps,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+/// Return the configured protocol fee in basis points (0 = disabled).
+pub fn get_protocol_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "fee_bps"))
+        .unwrap_or(0u32)
+}
+
+/// Return the configured treasury address, or None if not set.
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage()
+        .instance()
+        .get(&Symbol::new(env, "treasury"))
+}

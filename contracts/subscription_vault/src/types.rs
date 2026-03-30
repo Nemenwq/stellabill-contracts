@@ -899,3 +899,26 @@ pub struct MerchantRefundEvent {
     pub token: Address,
     pub amount: i128,
 }
+
+/// Event emitted when protocol fee configuration is updated by admin.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted on every charge where a non-zero protocol fee is collected.
+///
+/// Conservation guarantee: fee_amount + merchant_amount == gross_charge_amount
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
+    pub treasury: Address,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
+    pub timestamp: u64,
+}

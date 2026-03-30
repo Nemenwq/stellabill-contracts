@@ -129,13 +129,47 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
+            let fee_bps = crate::admin::get_protocol_fee_bps(env);
+            let treasury_opt = crate::admin::get_treasury(env);
+            let (merchant_amount, fee_amount) = if fee_bps > 0 {
+                if let Some(ref _t) = treasury_opt {
+                    let fee = charge_amount * fee_bps as i128 / 10_000i128;
+                    let net = charge_amount - fee;
+                    (net, fee)
+                } else {
+                    (charge_amount, 0i128)
+                }
+            } else {
+                (charge_amount, 0i128)
+            };
             crate::merchant::credit_merchant_balance_for_token(
                 env,
                 &sub.merchant,
                 &sub.token,
-                charge_amount,
+                merchant_amount,
                 BillingChargeKind::Interval,
             )?;
+            if fee_amount > 0 {
+                if let Some(ref treasury) = treasury_opt {
+                    crate::merchant::credit_merchant_balance_for_token(
+                        env,
+                        treasury,
+                        &sub.token,
+                        fee_amount,
+                        BillingChargeKind::Interval,
+                    )?;
+                    env.events().publish(
+                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                        crate::types::ProtocolFeeChargedEvent {
+                            subscription_id,
+                            treasury: treasury.clone(),
+                            fee_amount,
+                            merchant_amount,
+                            timestamp: now,
+                        },
+                    );
+                }
+            }
             sub.last_payment_timestamp = now;
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
