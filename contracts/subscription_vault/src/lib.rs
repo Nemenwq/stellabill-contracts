@@ -71,6 +71,7 @@
 //! - `docs/subscription_metadata.md`
 
 // ── Modules ──────────────────────────────────────────────────────────────────
+mod accounting;
 mod admin;
 mod blocklist;
 mod charge_core;
@@ -84,20 +85,29 @@ pub mod safe_math;
 mod state_machine;
 mod statements;
 mod subscription;
+mod types;
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod test_auth_fuzz;
+#[cfg(test)]
+mod test_expiration;
 #[cfg(test)]
 mod test_governance;
 #[cfg(test)]
 mod test_insufficient_balance;
 #[cfg(test)]
-mod test_refactor_check;
-#[cfg(test)]
-mod test_security;
-#[cfg(test)]
 mod test_multi_actor;
 #[cfg(test)]
+mod test_recovery;
+#[cfg(test)]
+mod test_refactor_check;
+#[cfg(test)]
 mod test_safe_math_regression;
+#[cfg(test)]
+mod test_security;
 #[cfg(test)]
 mod test_usage_limits;
 #[cfg(test)]

@@ -144,7 +144,6 @@ pub fn charge_one(
             if sub.status == SubscriptionStatus::GracePeriod {
                 validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
                 sub.status = SubscriptionStatus::Active;
-                sub.grace_start_timestamp = None; // <-- CRITICAL FIX
             }
 
             // Check if cap is now exactly reached -- auto-cancel

@@ -1171,9 +1171,6 @@ fn test_deposit_funds_event_payload() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    // min_topup is 1_000_000; try to deposit 500
-    client.deposit_funds(&id, &subscriber, &500);
-}
 
     client.deposit_funds(&id, &subscriber, &15_000_000);
 
@@ -1217,9 +1214,6 @@ fn test_deposit_funds_cei_compliance() {
         &false,
         &None::<i128>,
      &None::<u64>);
-}
-
-// -- Batch charge tests -------------------------------------------------------
 
     let initial_contract_balance = token_client.balance(&client.address);
     let deposit_amount = 20_000_000i128;
@@ -1236,6 +1230,8 @@ fn test_deposit_funds_cei_compliance() {
         initial_contract_balance + deposit_amount
     );
 }
+
+// -- Batch charge tests -------------------------------------------------------
 
 #[test]
 #[should_panic(expected = "Error(Contract, #402)")]
@@ -2239,41 +2235,6 @@ fn test_compute_next_charge_info_insufficient_balance() {
 }
 
 #[test]
-fn test_compute_next_charge_info_overflow_protection() {
-    let env = Env::default();
-    let sub = Subscription {
-        subscriber: Address::generate(&env),
-        merchant: Address::generate(&env),
-        token: Address::generate(&env),
-        amount: AMOUNT,
-        interval_seconds: 200,
-        last_payment_timestamp: u64::MAX - 100,
-        status: SubscriptionStatus::Active,
-        prepaid_balance: 100_000_000,
-        usage_enabled: false,
-        lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
-    };
-    let info = compute_next_charge_info(&sub);
-    assert!(info.is_charge_expected);
-    assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
-
-    env.ledger()
-        .with_mut(|li| li.timestamp = info.next_charge_timestamp - 1);
-    assert_eq!(
-        client.try_charge_subscription(&id),
-        Err(Ok(Error::IntervalNotElapsed))
-    );
-
-    env.ledger()
-        .with_mut(|li| li.timestamp = info.next_charge_timestamp);
-    assert_eq!(
-        client.try_charge_subscription(&id),
-        Ok(Ok(ChargeExecutionResult::Charged))
-    );
-}
-
-#[test]
 fn test_next_charge_info_cross_check_status_gating() {
     let (env, client, _, _) = setup_test_env();
     env.ledger().with_mut(|li| li.timestamp = T0);
@@ -2289,7 +2250,33 @@ fn test_next_charge_info_cross_check_status_gating() {
         seed_balance(&env, &client, id, PREPAID);
     }
 
+    env.ledger().with_mut(|li| li.timestamp = T0 + INTERVAL);
 
+    let paused_info = client.get_next_charge_info(&id_paused);
+    assert!(!paused_info.is_charge_expected);
+    assert_eq!(
+        client.try_charge_subscription(&id_paused),
+        Err(Ok(Error::NotActive))
+    );
+
+    let cancelled_info = client.get_next_charge_info(&id_cancelled);
+    assert!(!cancelled_info.is_charge_expected);
+    assert_eq!(
+        client.try_charge_subscription(&id_cancelled),
+        Err(Ok(Error::NotActive))
+    );
+
+    let insufficient_info = client.get_next_charge_info(&id_insufficient);
+    assert!(!insufficient_info.is_charge_expected);
+    assert_eq!(
+        client.try_charge_subscription(&id_insufficient),
+        Err(Ok(Error::NotActive))
+    );
+
+    let grace_info = client.get_next_charge_info(&id_grace);
+    assert!(grace_info.is_charge_expected);
+    assert_eq!(client.try_charge_subscription(&id_grace), Ok(Ok(ChargeExecutionResult::Charged)));
+}
 
 // -- Top-up estimation (precision) --------------------------------------------
 
@@ -2297,18 +2284,7 @@ fn test_next_charge_info_cross_check_status_gating() {
 fn test_estimate_topup_zero_intervals_returns_zero() {
     let (env, client, _, _) = setup_test_env();
     env.ledger().with_mut(|li| li.timestamp = T0);
-
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-    // Cap = 2 * AMOUNT, so after 2 charges, should auto-cancel
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &AMOUNT,
-        &INTERVAL,
-        &false,
-        &Some(2 * AMOUNT),
-     &None::<u64>);
+    let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
     seed_balance(&env, &client, id, PREPAID);
 
     assert_eq!(client.estimate_topup_for_intervals(&id, &0), 0);
@@ -2389,7 +2365,8 @@ fn test_compute_next_charge_info_overflow_protection() {
         usage_enabled: false,
         lifetime_cap: None,
         lifetime_charged: 0,
-        grace_start_timestamp: None,
+        start_time: 0,
+        expires_at: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -7063,7 +7040,8 @@ mod storage_layout {
             usage_enabled: false,
             lifetime_cap: Some(120_000_000),
             lifetime_charged: 10_000_000,
-            grace_start_timestamp: None,
+            start_time: 0,
+            expires_at: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -7164,7 +7142,8 @@ mod storage_layout {
             usage_enabled: false,
             lifetime_cap: None,
             lifetime_charged: 0,
-            grace_start_timestamp: None,
+            start_time: 0,
+            expires_at: None,
         };
 
         env.as_contract(&client.address, || {
