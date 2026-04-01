@@ -897,7 +897,7 @@ pub fn do_create_subscription_from_plan(
 
     env.storage().instance().set(&id, &sub);
 
-    // Persist linkage between subscription and the plan template it was created from.
+    // Persist linkage between subscription and the plan template
     let sub_plan_storage_key = sub_plan_key(env, id);
     env.storage()
         .instance()
