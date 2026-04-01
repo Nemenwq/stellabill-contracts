@@ -492,6 +492,46 @@ pub struct BillingRetentionConfig {
     pub keep_recent: u32,
 }
 
+/// Accrued totals by charge kind.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccruedTotals {
+    /// Total from interval charges.
+    pub interval: i128,
+    /// Total from usage charges.
+    pub usage: i128,
+    /// Total from one-off charges.
+    pub one_off: i128,
+}
+
+/// Merchant earnings by token.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenEarnings {
+    /// Accumulated earnings by charge kind.
+    pub accruals: AccruedTotals,
+    /// Total amount withdrawn by merchant.
+    pub withdrawals: i128,
+    /// Total amount refunded to subscribers.
+    pub refunds: i128,
+}
+
+/// Token reconciliation snapshot for merchant.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationSnapshot {
+    /// Token address.
+    pub token: Address,
+    /// Total accrued earnings from all charge kinds.
+    pub total_accruals: i128,
+    /// Total amount withdrawn.
+    pub total_withdrawals: i128,
+    /// Total amount refunded.
+    pub total_refunds: i128,
+    /// Computed balance: accruals - withdrawals - refunds.
+    pub computed_balance: i128,
+}
+
 /// Aggregated compacted history for pruned rows.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -721,7 +721,7 @@ pub fn do_charge_one_off(
         BillingChargeKind::OneOff,
         env.ledger().timestamp(),
         env.ledger().timestamp(),
-    );
+    )?;
 
     env.events().publish(
         (Symbol::new(env, "oneoff_ch"), subscription_id),

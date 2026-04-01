@@ -166,7 +166,7 @@ pub fn charge_one(
                 BillingChargeKind::Interval,
                 next_allowed.saturating_sub(sub.interval_seconds),
                 now,
-            );
+            )?;
 
             // Record charged period and optional idempotency key
             storage.set(&charged_period_key(subscription_id), &period_index);
@@ -430,7 +430,7 @@ pub fn charge_usage_one(
                 BillingChargeKind::Usage,
                 now,
                 now,
-            );
+            )?;
 
             env.events().publish(
                 (Symbol::new(env, "usage_charged"), subscription_id),
