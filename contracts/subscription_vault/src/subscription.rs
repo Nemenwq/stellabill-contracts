@@ -16,6 +16,20 @@
 //! 3. **Interactions**: Call token.transfer() AFTER state is persisted
 //!
 //! See `docs/reentrancy.md` for full details on reentrancy threats and mitigations.
+//!
+//! # Write-path scan complexity
+//!
+//! Two internal helpers perform O(n) sequential scans over all subscription IDs:
+//!
+//! | Helper | Called from | Guard |
+//! |---|---|---|
+//! | `count_active_subscriptions_for_plan` | `enforce_plan_concurrency_limit` | Fast-path skip when max_active == 0 |
+//! | `compute_subscriber_exposure` | `enforce_credit_limit_for_delta` | Fast-path skip when limit == 0 |
+//!
+//! Both helpers are bounded by [`MAX_WRITE_PATH_SCAN_DEPTH`]. Because their
+//! callers short-circuit when the relevant limit is not configured (the common
+//! case), the scan is only reached in contracts that actively enforce plan
+//! concurrency or subscriber credit limits.
 
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_add_balance, safe_sub, validate_non_negative};
@@ -23,7 +37,8 @@ use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, DataKey, Error, FundsDepositedEvent, PartialRefundEvent,
-    PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
+    LifetimeCapReachedEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent,
     SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
@@ -32,6 +47,27 @@ use crate::types::{
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
+
+/// Hard upper bound on the number of subscription IDs that may be scanned in a
+/// single write-path helper invocation.
+///
+/// Two internal helpers — `count_active_subscriptions_for_plan` and
+/// `compute_subscriber_exposure` — perform a full sequential scan over all
+/// subscription IDs when their respective feature (plan concurrency limit /
+/// subscriber credit limit) is configured.  This constant prevents a single
+/// transaction from reading an unbounded number of storage entries.
+///
+/// **Fast-path note**: when no plan concurrency limit or credit limit is
+/// configured (the common case), the O(n) scan is *never* reached — the
+/// caller returns early before calling these helpers.  The guard is therefore
+/// only triggered in contracts that actively use both features *and* have
+/// accumulated more than `MAX_WRITE_PATH_SCAN_DEPTH` subscriptions.
+///
+/// **Upgrade note**: if a live contract exceeds this threshold while a limit
+/// is configured, the affected operations (`create_subscription`,
+/// `deposit_funds`) will return `Error::InvalidInput`.  Raise this constant
+/// or disable the relevant limits before upgrading in that scenario.
+pub(crate) const MAX_WRITE_PATH_SCAN_DEPTH: u32 = 5_000;
 
 #[allow(dead_code)]
 pub fn next_id(env: &Env) -> u32 {
@@ -71,6 +107,20 @@ fn get_plan_max_active(env: &Env, plan_template_id: u32) -> u32 {
         .unwrap_or(0)
 }
 
+/// Count active subscriptions for `subscriber` on `plan_template_id`.
+///
+/// ## Complexity
+///
+/// O(min(`MAX_WRITE_PATH_SCAN_DEPTH`, `next_id`)) storage reads.
+/// Returns `Err(Error::InvalidInput)` if the total subscription count exceeds
+/// [`MAX_WRITE_PATH_SCAN_DEPTH`] to prevent unbounded reads on very large
+/// contracts.
+///
+/// ## Fast path
+///
+/// This function is only called when `plan_max_active > 0` for the given plan.
+/// When no concurrency limit is configured, `enforce_plan_concurrency_limit`
+/// returns early and this scan is never triggered.
 fn count_active_subscriptions_for_plan(
     env: &Env,
     subscriber: &Address,
@@ -78,6 +128,12 @@ fn count_active_subscriptions_for_plan(
 ) -> Result<u32, Error> {
     let next_id_key = Symbol::new(env, "next_id");
     let next_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+
+    // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs to prevent
+    // excessive storage reads in high-volume contracts.
+    if next_id > MAX_WRITE_PATH_SCAN_DEPTH {
+        return Err(Error::InvalidInput);
+    }
 
     let mut count = 0u32;
     let storage = env.storage().instance();
@@ -137,6 +193,22 @@ fn get_subscriber_credit_limit_internal(env: &Env, subscriber: &Address, token: 
         .unwrap_or(0)
 }
 
+/// Compute the total financial exposure of `subscriber` for a given `token`.
+///
+/// Exposure = sum of prepaid balances + next-interval amount for every active
+/// subscription belonging to this subscriber and token.
+///
+/// ## Complexity
+///
+/// O(min(`MAX_WRITE_PATH_SCAN_DEPTH`, `next_id`)) storage reads.
+/// Returns `Err(Error::InvalidInput)` when the subscription count exceeds
+/// [`MAX_WRITE_PATH_SCAN_DEPTH`].
+///
+/// ## Fast path
+///
+/// Only called when `get_subscriber_credit_limit_internal` returns a non-zero
+/// value. When no credit limit is configured, `enforce_credit_limit_for_delta`
+/// returns early and this scan is never triggered.
 fn compute_subscriber_exposure(
     env: &Env,
     subscriber: &Address,
@@ -144,6 +216,12 @@ fn compute_subscriber_exposure(
 ) -> Result<i128, Error> {
     let next_id_key = Symbol::new(env, "next_id");
     let next_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+
+    // Guard: refuse to scan more than MAX_WRITE_PATH_SCAN_DEPTH IDs.
+    if next_id > MAX_WRITE_PATH_SCAN_DEPTH {
+        return Err(Error::InvalidInput);
+    }
+
     let storage = env.storage().instance();
 
     let mut exposure: i128 = 0;
@@ -277,6 +355,7 @@ pub fn do_create_subscription_with_token(
         lifetime_charged: 0i128,
         start_time: env.ledger().timestamp(),
         expires_at,
+        grace_start_timestamp: None,
     };
 
     // Allocate ID with overflow / limit guard.
@@ -477,6 +556,10 @@ pub fn do_pause_subscription(
         return Err(Error::SubscriptionExpired);
     }
 
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
+    }
+
     validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
 
     // Idempotent: already paused — nothing to do, no event.
@@ -521,6 +604,9 @@ pub fn do_resume_subscription(
 
     if sub.is_expired(env.ledger().timestamp()) {
         return Err(Error::SubscriptionExpired);
+    }
+    if authorizer != sub.subscriber && authorizer != sub.merchant {
+        return Err(Error::Forbidden);
     }
     if authorizer == sub.subscriber {
         crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
@@ -606,6 +692,10 @@ pub fn do_charge_one_off(
         }
     }
     sub.lifetime_charged = new_charged;
+    let cap_reached = sub
+        .lifetime_cap
+        .map(|cap| sub.lifetime_charged >= cap)
+        .unwrap_or(false);
 
     sub.prepaid_balance = safe_sub(sub.prepaid_balance, amount)?;
 
@@ -617,6 +707,11 @@ pub fn do_charge_one_off(
         BillingChargeKind::OneOff,
     )?;
 
+    if cap_reached {
+        validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+        sub.status = SubscriptionStatus::Cancelled;
+    }
+
     env.storage().instance().set(&subscription_id, &sub);
     append_statement(
         env,
@@ -626,7 +721,7 @@ pub fn do_charge_one_off(
         BillingChargeKind::OneOff,
         env.ledger().timestamp(),
         env.ledger().timestamp(),
-    );
+    )?;
 
     env.events().publish(
         (Symbol::new(env, "oneoff_ch"), subscription_id),
@@ -636,6 +731,20 @@ pub fn do_charge_one_off(
             amount,
         },
     );
+
+    if cap_reached {
+        if let Some(cap) = sub.lifetime_cap {
+            env.events().publish(
+                (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                LifetimeCapReachedEvent {
+                    subscription_id,
+                    lifetime_cap: cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    timestamp: now,
+                },
+            );
+        }
+    }
 
     Ok(())
 }
@@ -711,17 +820,30 @@ pub fn do_withdraw_subscriber_funds(
         return Err(Error::InvalidAmount);
     }
 
+    let token_addr = sub.token.clone();
+
+    // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;
-env.storage().instance().set(&subscription_id, &sub);
-    if let Ok(token_addr) = crate::admin::get_token(env) {
-        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &subscriber,
-            &amount_to_refund,
-        );
-        crate::accounting::sub_total_accounted(env, &token_addr, amount_to_refund)?;
-    }
+    let token_addr = sub.token.clone();
+    env.storage().instance().set(&subscription_id, &sub);
+
+    // INTERACTIONS: transfer refund from vault to subscriber.
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
+    token_client.transfer(
+        &env.current_contract_address(),
+        &subscriber,
+        &amount_to_refund,
+    );
+    crate::accounting::sub_total_accounted(env, &token_addr, amount_to_refund)?;
+
+    env.events().publish(
+        (Symbol::new(env, "sub_withdrawn"), subscription_id),
+        SubscriberWithdrawalEvent {
+            subscription_id,
+            subscriber,
+            amount: amount_to_refund,
+        },
+    );
 
     Ok(())
 }
@@ -769,9 +891,10 @@ pub fn do_partial_refund(
     env.storage().instance().set(&subscription_id, &sub);
 
     // Interactions: transfer refund from vault to subscriber.
-    let token_client = soroban_sdk::token::Client::new(env, &sub.token);
+    let token_addr = sub.token.clone();
+    let token_client = soroban_sdk::token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+    crate::accounting::sub_total_accounted(env, &sub.token, amount)?;
 
     env.events().publish(
         (Symbol::new(env, "partial_refund"), subscription_id),
@@ -893,12 +1016,13 @@ pub fn do_create_subscription_from_plan(
         lifetime_cap: plan.lifetime_cap,
         lifetime_charged: 0i128,
         start_time: env.ledger().timestamp(),
-        expires_at: None, // Subscriptions from plan templates have no fixed expiration by default
+        expires_at: None,
+        grace_start_timestamp: None,
     };
 
     env.storage().instance().set(&id, &sub);
 
-    // Persist linkage between subscription and the plan template it was created from.
+    // Persist linkage between subscription and the plan template
     let sub_plan_storage_key = sub_plan_key(env, id);
     env.storage()
         .instance()

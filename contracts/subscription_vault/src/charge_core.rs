@@ -17,7 +17,7 @@ use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
 use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, ChargeExecutionResult, DataKey, Error, FundsDepositedEvent,
+    BillingChargeKind, ChargeExecutionResult, DataKey, Error,
     LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
 };
@@ -178,7 +178,6 @@ pub fn charge_one(
             if sub.status == SubscriptionStatus::GracePeriod {
                 validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
                 sub.status = SubscriptionStatus::Active;
-                sub.grace_start_timestamp = None; // <-- CRITICAL FIX
             }
 
             // Check if cap is now exactly reached -- auto-cancel
@@ -201,7 +200,7 @@ pub fn charge_one(
                 BillingChargeKind::Interval,
                 next_allowed.saturating_sub(sub.interval_seconds),
                 now,
-            );
+            )?;
 
             // Record charged period and optional idempotency key
             storage.set(&charged_period_key(subscription_id), &period_index);
@@ -408,15 +407,13 @@ pub fn charge_usage_one(
     }
 
     // -- Lifetime cap pre-check -----------------------------------------------
-    // Increment lifetime_charged regardless of whether a cap is set.
-    sub.lifetime_charged = safe_add(sub.lifetime_charged, usage_amount)?;
-
+    // Over-cap attempts are blocked and cancel the subscription without debiting funds.
+    let pending_lifetime = safe_add(sub.lifetime_charged, usage_amount)?;
     if let Some(cap) = sub.lifetime_cap {
-        if sub.lifetime_charged >= cap {
+        if pending_lifetime > cap {
             validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
             sub.status = SubscriptionStatus::Cancelled;
             env.storage().instance().set(&subscription_id, &sub);
-
             env.events().publish(
                 (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
                 LifetimeCapReachedEvent {
@@ -426,7 +423,6 @@ pub fn charge_usage_one(
                     timestamp: now,
                 },
             );
-
             return Ok(());
         }
     }
@@ -442,8 +438,17 @@ pub fn charge_usage_one(
                 BillingChargeKind::Usage,
             )?;
 
-            // If balance hits exactly 0, move to InsufficientBalance
-            if new_balance == 0 {
+            sub.lifetime_charged = pending_lifetime;
+            let cap_reached = sub
+                .lifetime_cap
+                .map(|cap| sub.lifetime_charged >= cap)
+                .unwrap_or(false);
+
+            if cap_reached {
+                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+                sub.status = SubscriptionStatus::Cancelled;
+            } else if new_balance == 0 {
+                // Without a cap hit, zero remaining prepaid means underfunded for future usage.
                 validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
                 sub.status = SubscriptionStatus::InsufficientBalance;
             }
@@ -459,7 +464,7 @@ pub fn charge_usage_one(
                 BillingChargeKind::Usage,
                 now,
                 now,
-            );
+            )?;
 
             env.events().publish(
                 (Symbol::new(env, "usage_charged"), subscription_id),
@@ -472,6 +477,20 @@ pub fn charge_usage_one(
                     reference,
                 },
             );
+
+            if cap_reached {
+                if let Some(cap) = sub.lifetime_cap {
+                    env.events().publish(
+                        (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                        LifetimeCapReachedEvent {
+                            subscription_id,
+                            lifetime_cap: cap,
+                            lifetime_charged: sub.lifetime_charged,
+                            timestamp: now,
+                        },
+                    );
+                }
+            }
             Ok(())
         }
         Err(_) => {

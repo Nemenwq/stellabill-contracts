@@ -35,14 +35,7 @@ fn create_security_subscription(
 ) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
-    let id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &AMOUNT,
-        &INTERVAL,
-        &false,
-        &None::<i128>,
-    );
+    let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
     (id, subscriber, merchant)
 }
 
@@ -179,7 +172,9 @@ fn test_charge_amount_greater_than_balance_fails() {
     let (env, client, _, _) = setup_security_env();
     let (id, _, _) = create_security_subscription(&env, &client);
 
-    // Balance is 0, charge amount is 10 USDC
+    // Balance is 0, charge amount is 10 USDC.
+    // charge_subscription returns Ok(InsufficientBalance) rather than Err when balance is
+    // insufficient — the contract handles underfunding as a recoverable outcome, not a panic.
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     let result = client.try_charge_subscription(&id);
