@@ -88,7 +88,7 @@ fn test_pause_subscription_unauthorized_stranger() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #401)")]
+#[should_panic(expected = "Error(Contract, #1001)")]
 fn test_rotate_admin_unauthorized() {
     let (env, client, _, _) = setup_security_env();
     let stranger = Address::generate(&env);
@@ -152,7 +152,7 @@ fn test_replay_protection_on_batch_charge() {
     assert_eq!(results.len(), 2);
     assert!(results.get(0).unwrap().success);
     assert!(!results.get(1).unwrap().success);
-    assert_eq!(results.get(1).unwrap().error_code, 1007); // Replay
+    assert_eq!(results.get(1).unwrap().error_code, 4005); // Replay
 }
 
 // ── Risk Class 4: Arithmetic Bounds ──────────────────────────────────────────
@@ -191,7 +191,7 @@ fn test_deposit_negative_amount_fails() {
 
     let result = client.try_deposit_funds(&id, &subscriber, &-1);
     assert!(result.is_err());
-    // Error code 501 is Underflow (used for negative amount check)
+    // Error code 5004 is Underflow (used for negative amount check)
 }
 
 // ── Chained Operations & Edge Cases ──────────────────────────────────────────

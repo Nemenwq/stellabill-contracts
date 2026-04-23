@@ -181,14 +181,14 @@ fn test_subscriber_list_empty() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_subscriber_list_invalid_limit_zero() {
     let (env, client, _token, _) = setup();
     client.list_subscriptions_by_subscriber(&Address::generate(&env), &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_subscriber_list_invalid_limit_overflow() {
     let (env, client, _token, _) = setup();
     client.list_subscriptions_by_subscriber(&Address::generate(&env), &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -231,14 +231,14 @@ fn test_merchant_query_pagination() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_merchant_query_limit_zero() {
     let (env, client, _token, _) = setup();
     client.get_subscriptions_by_merchant(&Address::generate(&env), &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_merchant_query_limit_overflow() {
     let (env, client, _token, _) = setup();
     client.get_subscriptions_by_merchant(&Address::generate(&env), &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -289,14 +289,14 @@ fn test_token_query_pagination() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_token_query_limit_zero() {
     let (env, client, token, _) = setup();
     client.get_subscriptions_by_token(&token, &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_token_query_limit_overflow() {
     let (env, client, token, _) = setup();
     client.get_subscriptions_by_token(&token, &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -318,7 +318,7 @@ fn test_merchant_count_and_token_count() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
     let (env, client, token, _) = setup();
     

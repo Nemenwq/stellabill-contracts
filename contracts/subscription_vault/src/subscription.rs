@@ -41,8 +41,7 @@ use crate::types::{
     SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent,
-    SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
-    UsageLimits, UsageState,
+    SubscriptionStatus, UsageLimits,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -74,16 +73,16 @@ pub fn next_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_id");
     let storage = env.storage().instance();
     let id: u32 = storage.get(&key).unwrap_or(0);
-    storage.set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let next = id.checked_add(1).unwrap_or(id);
+    storage.set(&key, &next);
     id
 }
 
 pub fn next_plan_id(env: &Env) -> u32 {
     let key = Symbol::new(env, "next_plan_id");
     let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage()
-        .instance()
-        .set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let next = id.checked_add(1).unwrap_or(id);
+    env.storage().instance().set(&key, &next);
     id
 }
 
@@ -364,9 +363,8 @@ pub fn do_create_subscription_with_token(
     if id == crate::MAX_SUBSCRIPTION_ID {
         return Err(Error::SubscriptionLimitReached);
     }
-    env.storage()
-        .instance()
-        .set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
+    env.storage().instance().set(&key, &next_id);
 
     env.storage().instance().set(&id, &sub);
 
@@ -422,6 +420,9 @@ pub fn do_deposit_funds(
     validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
+    if subscriber != sub.subscriber {
+        return Err(Error::Unauthorized);
+    }
     
     let now = env.ledger().timestamp();
     // Expiration guard
@@ -674,6 +675,25 @@ pub fn do_charge_one_off(
     if sub.merchant != merchant {
         return Err(Error::Unauthorized);
     }
+    if let Some(cap) = sub.lifetime_cap {
+        if sub.lifetime_charged >= cap {
+            if sub.status != SubscriptionStatus::Cancelled {
+                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+                sub.status = SubscriptionStatus::Cancelled;
+                env.storage().instance().set(&subscription_id, &sub);
+                env.events().publish(
+                    (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                    LifetimeCapReachedEvent {
+                        subscription_id,
+                        lifetime_cap: cap,
+                        lifetime_charged: sub.lifetime_charged,
+                        timestamp: now,
+                    },
+                );
+            }
+            return Err(Error::LifetimeCapReached);
+        }
+    }
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
         return Err(Error::NotActive);
     }
@@ -688,6 +708,18 @@ pub fn do_charge_one_off(
     let new_charged = safe_add(sub.lifetime_charged, amount)?;
     if let Some(cap) = sub.lifetime_cap {
         if new_charged > cap {
+            validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+            sub.status = SubscriptionStatus::Cancelled;
+            env.storage().instance().set(&subscription_id, &sub);
+            env.events().publish(
+                (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                LifetimeCapReachedEvent {
+                    subscription_id,
+                    lifetime_cap: cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    timestamp: now,
+                },
+            );
             return Err(Error::LifetimeCapReached);
         }
     }
@@ -763,7 +795,7 @@ pub fn do_cleanup_subscription(
     let is_terminal = sub.status == SubscriptionStatus::Cancelled || sub.is_expired(now);
     
     if !is_terminal {
-        return Err(Error::NotActive); // Or some other error, meaning it's not terminal
+        return Err(Error::InvalidStatusTransition);
     }
 
     if sub.status != SubscriptionStatus::Archived {
@@ -817,10 +849,8 @@ pub fn do_withdraw_subscriber_funds(
 
     let amount_to_refund = sub.prepaid_balance;
     if amount_to_refund <= 0 {
-        return Err(Error::InvalidAmount);
+        return Err(Error::InsufficientBalance);
     }
-
-    let token_addr = sub.token.clone();
 
     // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;
@@ -999,9 +1029,8 @@ pub fn do_create_subscription_from_plan(
 
     let key = Symbol::new(env, "next_id");
     let id: u32 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage()
-        .instance()
-        .set(&key, &(safe_add(id as i128, 1).unwrap_or(0) as u32));
+    let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+    env.storage().instance().set(&key, &next_id);
 
     let sub = Subscription {
         subscriber: subscriber.clone(),
@@ -1084,7 +1113,7 @@ pub fn do_update_plan_template(
     }
 
     let new_plan_id = next_plan_id(env);
-    let new_version = safe_add(existing.version as i128, 1).unwrap_or(0) as u32;
+    let new_version = existing.version.checked_add(1).ok_or(Error::Overflow)?;
     let updated = PlanTemplate {
         merchant: merchant.clone(),
         token,

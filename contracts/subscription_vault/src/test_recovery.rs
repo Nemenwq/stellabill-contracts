@@ -79,7 +79,7 @@ fn test_recovery_unauthorized() {
     let recovery_id = String::from_str(&env, "rec_unauth");
     
     let result = client.try_recover_stranded_funds(&fake_admin, &token, &recipient, &10_000_000, &recovery_id, &RecoveryReason::UserOverpayment);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]

@@ -18,7 +18,7 @@ use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
@@ -62,6 +62,26 @@ pub fn charge_one(
 
     let charge_amount = crate::oracle::resolve_charge_amount(env, &sub)?;
 
+    if let Some(cap) = sub.lifetime_cap {
+        if sub.lifetime_charged >= cap {
+            if sub.status != SubscriptionStatus::Cancelled {
+                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+                sub.status = SubscriptionStatus::Cancelled;
+                env.storage().instance().set(&subscription_id, &sub);
+                env.events().publish(
+                    (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                    LifetimeCapReachedEvent {
+                        subscription_id,
+                        lifetime_cap: cap,
+                        lifetime_charged: sub.lifetime_charged,
+                        timestamp: now,
+                    },
+                );
+            }
+            return Ok(ChargeExecutionResult::LifetimeCapReached);
+        }
+    }
+
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::GracePeriod {
         return Err(Error::NotActive);
     }
@@ -102,10 +122,15 @@ pub fn charge_one(
 
     // -- Lifetime cap pre-check -----------------------------------------------
     if let Some(cap) = sub.lifetime_cap {
-        let remaining = safe_sub(cap, sub.lifetime_charged).unwrap_or(0).max(0);
+        let remaining = if sub.lifetime_charged >= cap {
+            0
+        } else {
+            safe_sub(cap, sub.lifetime_charged)?
+        };
 
         if remaining == 0 || charge_amount > remaining {
-            // Cap already exhausted or this charge would exceed it — cancel.
+            // Cap already exhausted or this charge would exceed it: cancel without
+            // moving funds and return an explicit terminal error.
             validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
             sub.status = SubscriptionStatus::Cancelled;
             env.storage().instance().set(&subscription_id, &sub);
@@ -120,7 +145,7 @@ pub fn charge_one(
                 },
             );
 
-            return Ok(ChargeExecutionResult::Charged);
+            return Ok(ChargeExecutionResult::LifetimeCapReached);
         }
     }
 
@@ -236,7 +261,7 @@ pub fn charge_one(
         }
         // charge_one.rs  —  replace the entire Err(_) arm in charge_one()
         Err(_) => {
-            let grace_duration = crate::admin::get_grace_period(env).unwrap_or(0);
+            let grace_duration = crate::admin::get_grace_period(env)?;
             let due_timestamp = sub
                 .last_payment_timestamp
                 .checked_add(sub.interval_seconds)
@@ -308,6 +333,26 @@ pub fn charge_usage_one(
             );
         }
         return Err(Error::SubscriptionExpired);
+    }
+
+    if let Some(cap) = sub.lifetime_cap {
+        if sub.lifetime_charged >= cap {
+            if sub.status != SubscriptionStatus::Cancelled {
+                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+                sub.status = SubscriptionStatus::Cancelled;
+                env.storage().instance().set(&subscription_id, &sub);
+                env.events().publish(
+                    (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
+                    LifetimeCapReachedEvent {
+                        subscription_id,
+                        lifetime_cap: cap,
+                        lifetime_charged: sub.lifetime_charged,
+                        timestamp: now,
+                    },
+                );
+            }
+            return Err(Error::LifetimeCapReached);
+        }
     }
 
     if sub.status != SubscriptionStatus::Active {

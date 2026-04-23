@@ -84,7 +84,11 @@ pub fn estimate_topup_for_intervals(
     let intervals_i128: i128 = num_intervals.into();
     let required = safe_mul(sub.amount, intervals_i128)?;
 
-    let topup = safe_sub(required, sub.prepaid_balance).unwrap_or(0).max(0);
+    let topup = if required <= sub.prepaid_balance {
+        0
+    } else {
+        safe_sub(required, sub.prepaid_balance)?
+    };
     Ok(topup)
 }
 
@@ -184,7 +188,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::GracePeriod => true,
-        SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::InsufficientBalance => false,
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
         SubscriptionStatus::Expired => false,

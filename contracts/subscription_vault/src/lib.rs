@@ -91,8 +91,6 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
 mod test_expiration;
@@ -174,7 +172,7 @@ fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
 fn get_emergency_stop(env: &Env) -> bool {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "emergency_stop"))
+        .get(&DataKey::EmergencyStop)
         .unwrap_or(false)
 }
 
@@ -358,7 +356,7 @@ impl SubscriptionVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "emergency_stop"), &true);
+            .set(&DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
             EmergencyStopEnabledEvent {
@@ -399,7 +397,7 @@ impl SubscriptionVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "emergency_stop"), &false);
+            .set(&DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
             EmergencyStopDisabledEvent {
@@ -440,13 +438,13 @@ impl SubscriptionVault {
         let token: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "token"))
+            .get(&DataKey::Token)
             .ok_or(Error::NotFound)?;
         let min_topup: i128 = admin::get_min_topup(&env)?;
         let next_id: u32 = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "next_id"))
+            .get(&DataKey::NextId)
             .unwrap_or(0);
 
         env.events().publish(
@@ -580,7 +578,7 @@ impl SubscriptionVault {
         let mut exported = 0u32;
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+            if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
                 out.push_back(SubscriptionSummary {
                     subscription_id: id,
                     subscriber: sub.subscriber,
@@ -1405,8 +1403,7 @@ impl SubscriptionVault {
 
     /// Return the total number of subscriptions ever created.
     pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "next_id");
-        env.storage().instance().get(&key).unwrap_or(0u32)
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32)
     }
 
     /// Return the total number of subscriptions for a merchant.
