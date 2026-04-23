@@ -737,6 +737,10 @@ impl SubscriptionVault {
         amount: i128,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
+        
+        // Acquire reentrancy guard: prevents re-entry during token transfer
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds")?;
+        
         subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
@@ -1046,12 +1050,20 @@ impl SubscriptionVault {
     /// # Events
     ///
     /// Emits `funds_withdrawn` event with `subscription_id`, `amount`, and timestamp.
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// token transfer. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
 
     pub fn withdraw_subscriber_funds(
         env: Env,
         subscription_id: u32,
         subscriber: Address,
     ) -> Result<(), Error> {
+        // Acquire reentrancy guard: prevents re-entry during token transfer
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_subscriber_funds")?;
+        
         subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
     }
 
@@ -1060,6 +1072,11 @@ impl SubscriptionVault {
     /// Only the contract admin may authorize partial refunds. The refunded amount
     /// is debited from the subscription's `prepaid_balance` and transferred back
     /// to the subscriber, following the same CEI pattern as other token flows.
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// token transfer. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn partial_refund(
         env: Env,
         admin: Address,
@@ -1067,6 +1084,9 @@ impl SubscriptionVault {
         subscriber: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        // Acquire reentrancy guard: prevents re-entry during token transfer
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "partial_refund")?;
+        
         subscription::do_partial_refund(&env, admin, subscription_id, subscriber, amount)
     }
 
@@ -1133,6 +1153,11 @@ impl SubscriptionVault {
     /// Merchant-initiated one-off charge against the subscription's prepaid balance.
     ///
     /// **This function is disabled when the emergency stop is active.**
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// state mutations. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn charge_one_off(
         env: Env,
         subscription_id: u32,
@@ -1140,6 +1165,10 @@ impl SubscriptionVault {
         amount: i128,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
+        
+        // Acquire reentrancy guard
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_one_off")?;
+        
         subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
     }
 
@@ -1152,19 +1181,38 @@ impl SubscriptionVault {
     /// Enforces strict interval timing and replay protection. Underfunded attempts
     /// move the subscription into a recoverable non-active state and emit a
     /// charge-failed event without mutating financial accounting fields.
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// state mutations. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn charge_subscription(
         env: Env,
         subscription_id: u32,
     ) -> Result<ChargeExecutionResult, Error> {
         require_not_emergency_stop(&env)?;
+        
+        // Acquire reentrancy guard: prevents the same function from being called
+        // recursively (e.g., if a malicious token contract tries to call back).
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
+        
         charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)
     }
 
     /// Charge a metered usage amount against the subscription's prepaid balance.
     ///
     /// **This function is disabled when the emergency stop is active.**
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// state mutations. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
+        
+        // Acquire reentrancy guard
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage")?;
+        
         charge_core::charge_usage_one(
             &env,
             subscription_id,
@@ -1176,6 +1224,11 @@ impl SubscriptionVault {
     /// Charge a metered usage amount against the subscription's prepaid balance with a reference.
     ///
     /// **This function is disabled when the emergency stop is active.**
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// state mutations. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn charge_usage_with_reference(
         env: Env,
         subscription_id: u32,
@@ -1183,6 +1236,10 @@ impl SubscriptionVault {
         reference: String,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
+        
+        // Acquire reentrancy guard
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage_with_reference")?;
+        
         charge_core::charge_usage_one(&env, subscription_id, usage_amount, reference)
     }
 
@@ -1248,7 +1305,15 @@ impl SubscriptionVault {
 /// - Unauthorized → if auth fails
 /// - InvalidAmount → if amount ≤ 0
 /// - InsufficientFunds → if balance is not enough
+///
+/// # Reentrancy Protection
+/// This function acquires a reentrancy guard to prevent recursive calls during
+/// token transfer. The guard is automatically released (even on error) via the
+/// Drop trait, guaranteeing cleanup.
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
+        // Acquire reentrancy guard: prevents re-entry during token transfer
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
+        
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
 
@@ -1264,12 +1329,20 @@ impl SubscriptionVault {
 /// # Errors
 /// Same as default withdraw +
 /// - TokenNotAccepted → if token is not supported
+///
+/// # Reentrancy Protection
+/// This function acquires a reentrancy guard to prevent recursive calls during
+/// token transfer. The guard is automatically released (even on error) via the
+/// Drop trait, guaranteeing cleanup.
     pub fn withdraw_merchant_token_funds(
         env: Env,
         merchant: Address,
         token: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        // Acquire reentrancy guard: prevents re-entry during token transfer
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_token_funds")?;
+        
         merchant::withdraw_merchant_funds_for_token(&env, merchant, token, amount)
     }
 
@@ -1321,6 +1394,11 @@ impl SubscriptionVault {
 /// - Unauthorized
 /// - InvalidAmount
 /// - InsufficientFunds
+///
+/// # Reentrancy Protection
+/// This function acquires a reentrancy guard to prevent recursive calls during
+/// token transfer. The guard is automatically released (even on error) via the
+/// Drop trait, guaranteeing cleanup.
     pub fn merchant_refund(
         env: Env,
         merchant: Address,
@@ -1328,6 +1406,9 @@ impl SubscriptionVault {
         token: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        // Acquire reentrancy guard: prevents re-entry during token transfer
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "merchant_refund")?;
+        
         merchant::merchant_refund(&env, merchant, subscriber, token, amount)
     }
 
