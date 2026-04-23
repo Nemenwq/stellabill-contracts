@@ -5,7 +5,7 @@ use crate::{
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    Address, Env, Vec as SorobanVec, IntoVal, Val,
+    Address, Env, Vec as SorobanVec, IntoVal,
 };
 
 // ── Roles ────────────────────────────────────────────────────────────────────
@@ -369,7 +369,7 @@ fn test_identity_collision_subscriber_is_merchant() {
         
     client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
     
-    let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None, &None::<u64>);
+    let plan_id = client.create_plan_template(&person, &10_000_000, &2592000, &false, &None);
     let sub_id = client.create_subscription_from_plan(&person, &plan_id);
     
     client.pause_subscription(&sub_id, &person);

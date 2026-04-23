@@ -40,9 +40,8 @@ use crate::types::{
     LifetimeCapReachedEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
     SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
-    UsageLimits, UsageState,
+    SubscriptionRecoveryReadyEvent, SubscriptionStatus,
+    UsageLimits,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -422,6 +421,9 @@ pub fn do_deposit_funds(
     validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
+    if subscriber != sub.subscriber {
+        return Err(Error::Forbidden);
+    }
     
     let now = env.ledger().timestamp();
     // Expiration guard
@@ -710,6 +712,18 @@ pub fn do_charge_one_off(
     if cap_reached {
         validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
         sub.status = SubscriptionStatus::Cancelled;
+        
+        if let Some(cap) = sub.lifetime_cap {
+            env.events().publish(
+                (symbol_short!("cap_reach"), subscription_id),
+                LifetimeCapReachedEvent {
+                    subscription_id,
+                    lifetime_cap: cap,
+                    lifetime_charged: sub.lifetime_charged,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
     }
 
     env.storage().instance().set(&subscription_id, &sub);
@@ -724,27 +738,13 @@ pub fn do_charge_one_off(
     )?;
 
     env.events().publish(
-        (Symbol::new(env, "oneoff_ch"), subscription_id),
+        (symbol_short!("oneoff_ch"), subscription_id),
         crate::types::OneOffChargedEvent {
             subscription_id,
             merchant: sub.merchant.clone(),
             amount,
         },
     );
-
-    if cap_reached {
-        if let Some(cap) = sub.lifetime_cap {
-            env.events().publish(
-                (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
-                LifetimeCapReachedEvent {
-                    subscription_id,
-                    lifetime_cap: cap,
-                    lifetime_charged: sub.lifetime_charged,
-                    timestamp: now,
-                },
-            );
-        }
-    }
 
     Ok(())
 }
@@ -807,6 +807,11 @@ pub fn do_withdraw_subscriber_funds(
         return Err(Error::Forbidden);
     }
 
+    let amount_to_refund = sub.prepaid_balance;
+    if amount_to_refund <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
     if sub.status != SubscriptionStatus::Cancelled
         && sub.status != SubscriptionStatus::Expired
         && sub.status != SubscriptionStatus::Archived
@@ -815,12 +820,7 @@ pub fn do_withdraw_subscriber_funds(
         return Err(Error::InvalidStatusTransition);
     }
 
-    let amount_to_refund = sub.prepaid_balance;
-    if amount_to_refund <= 0 {
-        return Err(Error::InvalidAmount);
-    }
-
-    let token_addr = sub.token.clone();
+    let _token_addr = sub.token.clone();
 
     // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;

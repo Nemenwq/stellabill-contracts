@@ -637,6 +637,8 @@ pub enum RecoveryReason {
     ExpiredEscrow = 2,
     /// System or logic correction.
     SystemCorrection = 3,
+    /// Funds sent accidentally to the contract address.
+    AccidentalTransfer = 4,
 }
 
 /// Event emitted when admin recovers stranded funds.
@@ -682,6 +684,9 @@ pub struct SubscriptionChargedEvent {
     pub merchant: Address,
     pub amount: i128,
     pub lifetime_charged: i128,
+    pub timestamp: u64,
+    pub period_start: u64,
+    pub period_end: u64,
 }
 
 /// Event emitted when an interval charge attempt cannot be completed due to
@@ -927,35 +932,6 @@ pub struct MerchantConfig {
     pub is_paused: bool,      // Global pause for all merchant plans
 }
 
-/// Aggregated billing totals used in compaction and earnings records.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    pub interval: i128,
-    pub usage: i128,
-    pub one_off: i128,
-}
-
-/// Per-token earnings record for a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-/// Reconciliation snapshot for a single token bucket held by a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
-}
-
 /// Event emitted when a merchant enables their blanket pause.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -971,6 +947,7 @@ pub struct MerchantUnpausedEvent {
     pub merchant: Address,
     pub timestamp: u64,
 }
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantRefundEvent {
@@ -980,41 +957,23 @@ pub struct MerchantRefundEvent {
     pub amount: i128,
 }
 
-/// Breakdown of a merchant's accrued earnings by charge kind.
+/// Event emitted when a protocol fee is charged on an interval billing.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    /// Total earned from interval charges.
-    pub interval: i128,
-    /// Total earned from usage charges.
-    pub usage: i128,
-    /// Total earned from one-off charges.
-    pub one_off: i128,
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
+    pub treasury: Address,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
+    pub timestamp: u64,
 }
 
-/// Accumulated earnings for a merchant for a single token.
+/// Event emitted when the protocol fee basis points are configured by admin.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    /// Accrued charge totals broken down by kind.
-    pub accruals: AccruedTotals,
-    /// Total amount withdrawn by the merchant.
-    pub withdrawals: i128,
-    /// Total amount refunded to subscribers.
-    pub refunds: i128,
-}
-
-/// A reconciliation snapshot for one token, returned by `get_reconciliation_snapshot`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    /// Sum of all charges accrued (interval + usage + one_off).
-    pub total_accruals: i128,
-    /// Sum of all withdrawals.
-    pub total_withdrawals: i128,
-    /// Sum of all subscriber refunds.
-    pub total_refunds: i128,
-    /// Computed balance = total_accruals - withdrawals - refunds.
-    pub computed_balance: i128,
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub timestamp: u64,
 }

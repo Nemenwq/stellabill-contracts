@@ -18,7 +18,7 @@ use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
@@ -62,11 +62,19 @@ pub fn charge_one(
 
     let charge_amount = crate::oracle::resolve_charge_amount(env, &sub)?;
 
-    if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::GracePeriod {
+    if sub.status != SubscriptionStatus::Active 
+        && sub.status != SubscriptionStatus::GracePeriod
+        && sub.status != SubscriptionStatus::InsufficientBalance {
         return Err(Error::NotActive);
     }
 
-    let period_index = now / sub.interval_seconds;
+    let period_index = now.saturating_sub(sub.start_time) / sub.interval_seconds;
+    let period_start = sub.start_time
+        .checked_add(period_index.checked_mul(sub.interval_seconds).ok_or(Error::Overflow)?)
+        .ok_or(Error::Overflow)?;
+    let period_end = period_start
+        .checked_add(sub.interval_seconds)
+        .ok_or(Error::Overflow)?;
 
     // Idempotent return: same idempotency key already processed
     if let Some(ref k) = idempotency_key {
@@ -170,12 +178,12 @@ pub fn charge_one(
                     );
                 }
             }
-            sub.last_payment_timestamp = now;
+            sub.last_payment_timestamp = period_start;
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
 
-            // Recover from grace period on successful charge
-            if sub.status == SubscriptionStatus::GracePeriod {
+            // Recover from grace period or insufficient balance on successful charge
+            if sub.status == SubscriptionStatus::GracePeriod || sub.status == SubscriptionStatus::InsufficientBalance {
                 validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
                 sub.status = SubscriptionStatus::Active;
             }
@@ -215,6 +223,9 @@ pub fn charge_one(
                     merchant: sub.merchant.clone(),
                     amount: charge_amount,
                     lifetime_charged: sub.lifetime_charged,
+                    timestamp: now,
+                    period_start,
+                    period_end,
                 },
             );
 
@@ -355,7 +366,7 @@ pub fn charge_usage_one(
                 window_start_timestamp: now,
                 window_call_count: 0,
                 current_period_usage_units: 0,
-                period_index: now / sub.interval_seconds,
+                period_index: now.saturating_sub(sub.start_time) / sub.interval_seconds,
             });
 
         // 1. Burst protection
@@ -383,7 +394,7 @@ pub fn charge_usage_one(
 
         // 3. Usage cap (per-interval)
         if let Some(cap_units) = limits.usage_cap_units {
-            let current_period = now / sub.interval_seconds;
+            let current_period = now.saturating_sub(sub.start_time) / sub.interval_seconds;
             if current_period > state.period_index {
                 state.period_index = current_period;
                 state.current_period_usage_units = 0;
