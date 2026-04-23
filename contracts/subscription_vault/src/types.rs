@@ -426,6 +426,14 @@ pub struct NextChargeInfo {
     pub next_charge_timestamp: u64,
     /// Whether a charge is actually expected based on the subscription status.
     pub is_charge_expected: bool,
+    /// Current status of the subscription.
+    pub status: SubscriptionStatus,
+    /// Stable reason for the current charge state (e.g. symbol_short!("active"), symbol_short!("paused")).
+    pub reason: soroban_sdk::Symbol,
+    /// Next charge amount.
+    pub amount: i128,
+    /// Token address for the charge.
+    pub token: soroban_sdk::Address,
 }
 
 /// View of a subscription's lifetime cap status.

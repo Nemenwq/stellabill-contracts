@@ -175,25 +175,78 @@ pub fn get_subscriptions_by_token(
     Ok(out)
 }
 
-/// Computes the estimated next charge timestamp for a subscription.
-pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
+/// Returns full next charge information for a subscription.
+pub fn get_next_charge_info(env: &Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
+    let sub = get_subscription(env, subscription_id)?;
+    Ok(compute_next_charge_info(env, &sub))
+}
+
+/// Computes the estimated next charge timestamp and status for a subscription.
+pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextChargeInfo {
     let next_charge_timestamp = subscription
         .last_payment_timestamp
         .saturating_add(subscription.interval_seconds);
 
-    let is_charge_expected = match subscription.status {
-        SubscriptionStatus::Active => true,
-        SubscriptionStatus::GracePeriod => true,
-        SubscriptionStatus::InsufficientBalance => true,
-        SubscriptionStatus::Paused => false,
-        SubscriptionStatus::Cancelled => false,
-        SubscriptionStatus::Expired => false,
-        SubscriptionStatus::Archived => false,
-    };
+    let now = env.ledger().timestamp();
+    let mut is_charge_expected = false;
+    let mut reason = soroban_sdk::symbol_short!("none");
+
+    if subscription.is_expired(now) {
+        reason = soroban_sdk::symbol_short!("expired");
+    } else {
+        match subscription.status {
+            SubscriptionStatus::Active => {
+                if let Some(cap) = subscription.lifetime_cap {
+                    if subscription.lifetime_charged >= cap {
+                        reason = soroban_sdk::symbol_short!("cap_hit");
+                    } else if subscription.amount > cap.saturating_sub(subscription.lifetime_charged) {
+                        reason = soroban_sdk::symbol_short!("cap_near");
+                        is_charge_expected = true;
+                    } else if subscription.prepaid_balance < subscription.amount {
+                        reason = soroban_sdk::symbol_short!("funds_low");
+                        is_charge_expected = true;
+                    } else {
+                        reason = soroban_sdk::symbol_short!("active");
+                        is_charge_expected = true;
+                    }
+                } else if subscription.prepaid_balance < subscription.amount {
+                    reason = soroban_sdk::symbol_short!("funds_low");
+                    is_charge_expected = true;
+                } else {
+                    reason = soroban_sdk::symbol_short!("active");
+                    is_charge_expected = true;
+                }
+            }
+            SubscriptionStatus::Paused => {
+                reason = soroban_sdk::symbol_short!("paused");
+            }
+            SubscriptionStatus::Cancelled => {
+                reason = soroban_sdk::symbol_short!("cancel");
+            }
+            SubscriptionStatus::Expired => {
+                reason = soroban_sdk::symbol_short!("expired");
+            }
+            SubscriptionStatus::InsufficientBalance => {
+                reason = soroban_sdk::symbol_short!("funds_low");
+                is_charge_expected = true;
+            }
+            SubscriptionStatus::GracePeriod => {
+                reason = soroban_sdk::symbol_short!("grace");
+                is_charge_expected = true;
+            }
+            SubscriptionStatus::Archived => {
+                reason = soroban_sdk::symbol_short!("archived");
+            }
+        }
+    }
 
     NextChargeInfo {
         next_charge_timestamp,
         is_charge_expected,
+        status: subscription.status,
+        reason,
+        amount: subscription.amount,
+        token: subscription.token.clone(),
     }
 }
 

@@ -114,6 +114,8 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_next_charge_info;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -1385,8 +1387,7 @@ impl SubscriptionVault {
 /// # Errors
 /// NotFound → subscription doesn’t exist.
     pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
-        let sub = queries::get_subscription(&env, subscription_id)?;
-        Ok(compute_next_charge_info(&sub))
+        queries::get_next_charge_info(&env, subscription_id)
     }
 
     /// Return subscriptions for a merchant, paginated.

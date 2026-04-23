@@ -2177,7 +2177,7 @@ fn test_compute_next_charge_info_active() {
         lifetime_cap: None,
         lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
     assert!(info.is_charge_expected);
 }
@@ -2198,7 +2198,7 @@ fn test_compute_next_charge_info_paused() {
         lifetime_cap: None,
         lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 2000 + INTERVAL);
 }
@@ -2219,7 +2219,7 @@ fn test_compute_next_charge_info_cancelled() {
         lifetime_cap: None,
         lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
 }
 
@@ -2239,7 +2239,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         lifetime_cap: None,
         lifetime_charged: 0, start_time: 0, expires_at: None, grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 3000 + INTERVAL);
 }
@@ -2373,7 +2373,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, u64::MAX);
 }
