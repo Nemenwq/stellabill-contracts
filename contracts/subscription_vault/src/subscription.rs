@@ -9,13 +9,19 @@
 //! This module contains two critical external calls to the token contract:
 //! - `do_deposit_funds`: transfers tokens FROM subscriber TO contract
 //! - `do_withdraw_subscriber_funds`: transfers tokens FROM contract TO subscriber
+//! - `do_partial_refund`: transfers tokens FROM contract TO subscriber
 //!
-//! Both functions follow the **Checks-Effects-Interactions (CEI)** pattern:
+//! All functions follow the **Checks-Effects-Interactions (CEI)** pattern:
 //! 1. **Checks**: Validate inputs and authorization
 //! 2. **Effects**: Update internal contract state (prepaid_balance) in storage
 //! 3. **Interactions**: Call token.transfer() AFTER state is persisted
 //!
-//! See `docs/reentrancy.md` for full details on reentrancy threats and mitigations.
+//! **Guard layer**: Public entry-points in `lib.rs` acquire a `ReentrancyGuard` before
+//! calling these internal helpers. This prevents the same function from being re-entered
+//! during an external call (defense in depth).
+//!
+//! See `docs/reentrancy.md` and `docs/reentrancy_hardening.md` for full details
+//! on reentrancy threats and mitigations.
 //!
 //! # Write-path scan complexity
 //!
