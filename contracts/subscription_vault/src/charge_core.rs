@@ -9,6 +9,24 @@
 //! See `docs/lifetime_caps.md` for cap enforcement semantics.
 //!
 //! **PRs that only change how one subscription is charged should edit this file only.**
+//!
+//! # Reentrancy Safety
+//!
+//! This module does **not make external token transfers**. All state mutations happen
+//! before any external interactions:
+//!
+//! 1. **Checks**: Validate expiration, status, interval, balance, replay protection, caps
+//! 2. **Effects**: Update subscription state AND merchant earnings in storage
+//! 3. **Interactions**: None (no external calls in this module)
+//!
+//! The public entry-point `lib.rs::charge_subscription` acquires a `ReentrancyGuard`
+//! before calling `charge_one`, providing defense-in-depth protection even though
+//! this function is naturally safe from external reentrancy.
+//!
+//! Merchant crediting happens through internal calls to `merchant::credit_merchant_balance_for_token`,
+//! which only updates storage and does not call external contracts.
+//!
+//! See `docs/reentrancy_hardening.md` for complete charge path analysis.
 
 #![allow(dead_code)]
 
