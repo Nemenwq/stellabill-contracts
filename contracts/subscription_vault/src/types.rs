@@ -980,6 +980,29 @@ pub struct MerchantRefundEvent {
     pub amount: i128,
 }
 
+/// Event emitted when protocol fees are charged during an interval charge.
+///
+/// Emitted only when a protocol fee percentage is configured and fees are routed
+/// to a Treasury account.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
+    pub treasury: Address,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
+    pub timestamp: u64,
+}
+
+/// Event emitted when protocol fee configuration is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeConfiguredEvent {
+    pub fee_bps: u32,
+    pub treasury: Option<Address>,
+    pub timestamp: u64,
+}
+
 /// Breakdown of a merchant's accrued earnings by charge kind.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
