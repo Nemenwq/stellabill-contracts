@@ -79,9 +79,9 @@ fn test_deposit_funds_state_committed_before_transfer() {
 #[should_panic(expected = "Error(Auth, InvalidAction)")]
 fn test_pause_subscription_unauthorized_stranger() {
     let (env, client, _, _) = setup_security_env();
-    env.mock_auths(&[]); // Disable mock_all_auths for explicit check
-
     let (id, _, _) = create_security_subscription(&env, &client);
+    
+    env.mock_auths(&[]); // Disable mock_all_auths for explicit check
     let stranger = Address::generate(&env);
 
     client.pause_subscription(&id, &stranger);

@@ -36,7 +36,7 @@ use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, ChargeExecutionResult, DataKey, Error,
-    LifetimeCapReachedEvent, Subscription, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
+    LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
@@ -252,7 +252,6 @@ pub fn charge_one(
 
             Ok(ChargeExecutionResult::Charged)
         }
-        // charge_one.rs  —  replace the entire Err(_) arm in charge_one()
         Err(_) => {
             let grace_duration = crate::admin::get_grace_period(env).unwrap_or(0);
             let due_timestamp = sub

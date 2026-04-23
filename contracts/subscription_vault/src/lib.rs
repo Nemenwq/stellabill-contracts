@@ -91,7 +91,7 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
+mod test_indexer_fixtures;
 #[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]

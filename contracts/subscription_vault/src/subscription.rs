@@ -46,9 +46,8 @@ use crate::types::{
     LifetimeCapReachedEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
     SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionRecoveryReadyEvent as SubscriptionRecoveryReadyEventAlias, SubscriptionStatus,
-    UsageLimits, UsageState,
+    SubscriptionRecoveryReadyEvent, SubscriptionStatus,
+    UsageLimits,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -428,7 +427,9 @@ pub fn do_deposit_funds(
     validate_non_negative(amount)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
-    
+    if sub.subscriber != subscriber {
+        return Err(Error::Forbidden);
+    }
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {
@@ -826,7 +827,7 @@ pub fn do_withdraw_subscriber_funds(
         return Err(Error::InvalidAmount);
     }
 
-    let token_addr = sub.token.clone();
+    let _token_addr = sub.token.clone();
 
     // EFFECTS: zero the balance before the external token transfer (CEI pattern).
     sub.prepaid_balance = 0;
