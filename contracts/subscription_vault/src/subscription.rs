@@ -680,6 +680,10 @@ pub fn do_charge_one_off(
     if sub.merchant != merchant {
         return Err(Error::Unauthorized);
     }
+    // Merchant pause guard — paused merchants cannot initiate any charges
+    if crate::merchant::get_merchant_paused(env, merchant.clone()) {
+        return Err(Error::MerchantPaused);
+    }
     if sub.status != SubscriptionStatus::Active && sub.status != SubscriptionStatus::Paused {
         return Err(Error::NotActive);
     }

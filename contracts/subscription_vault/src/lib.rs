@@ -116,6 +116,8 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_merchant_pause;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
