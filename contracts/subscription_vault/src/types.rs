@@ -492,46 +492,6 @@ pub struct BillingRetentionConfig {
     pub keep_recent: u32,
 }
 
-/// Accrued totals by charge kind.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    /// Total from interval charges.
-    pub interval: i128,
-    /// Total from usage charges.
-    pub usage: i128,
-    /// Total from one-off charges.
-    pub one_off: i128,
-}
-
-/// Merchant earnings by token.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    /// Accumulated earnings by charge kind.
-    pub accruals: AccruedTotals,
-    /// Total amount withdrawn by merchant.
-    pub withdrawals: i128,
-    /// Total amount refunded to subscribers.
-    pub refunds: i128,
-}
-
-/// Token reconciliation snapshot for merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    /// Token address.
-    pub token: Address,
-    /// Total accrued earnings from all charge kinds.
-    pub total_accruals: i128,
-    /// Total amount withdrawn.
-    pub total_withdrawals: i128,
-    /// Total amount refunded.
-    pub total_refunds: i128,
-    /// Computed balance: accruals - withdrawals - refunds.
-    pub computed_balance: i128,
-}
-
 /// Aggregated compacted history for pruned rows.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -571,6 +531,82 @@ pub struct BillingCompactedEvent {
     pub aggregate_oldest_period_start: Option<u64>,
     pub aggregate_newest_period_end: Option<u64>,
 }
+
+// ── Period-end billing statement types ───────────────────────────────────────
+
+/// Reason a period billing statement was finalized.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BillingStatementFinalization {
+    PeriodClosed = 0,
+    Cancellation = 1,
+    FinalSettlement = 2,
+}
+
+/// Lightweight index entry for subscription/merchant pagination.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BillingStatementRef {
+    pub subscription_id: u32,
+    pub period_index: u32,
+    pub period_end_timestamp: u64,
+}
+
+/// Event emitted when a period billing statement is written or overwritten.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BillingStatementPersistedEvent {
+    pub subscription_id: u32,
+    pub period_index: u32,
+    pub merchant: Address,
+    pub finalized_by: BillingStatementFinalization,
+}
+
+/// Grouped financial amounts for a single billing period.
+///
+/// Passed as one parameter to `finalize_billing_statement` to stay within Soroban's
+/// 10-parameter contract function limit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeriodStatementAmounts {
+    pub total_amount_charged: i128,
+    pub total_usage_units: i128,
+    pub protocol_fee_amount: i128,
+    pub net_amount_to_merchant: i128,
+    pub refund_amount: i128,
+}
+
+/// Per-period billing record written at period close, cancellation, or final settlement.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PeriodBillingStatement {
+    pub subscription_id: u32,
+    pub period_index: u32,
+    pub snapshot_period_index: u32,
+    pub merchant: Address,
+    pub subscriber: Address,
+    pub token: Address,
+    pub period_start_timestamp: u64,
+    pub period_end_timestamp: u64,
+    pub total_amount_charged: i128,
+    pub total_usage_units: i128,
+    pub protocol_fee_amount: i128,
+    pub net_amount_to_merchant: i128,
+    pub refund_amount: i128,
+    pub status_flags: u32,
+    pub subscription_status: SubscriptionStatus,
+    pub finalized_by: BillingStatementFinalization,
+    pub finalized_at: u64,
+}
+
+/// `status_flags` bit constants for `PeriodBillingStatement`.
+pub const STMT_FLAG_INTERVAL_CHARGED: u32 = 0b0000_0001;
+pub const STMT_FLAG_USAGE_CHARGED: u32    = 0b0000_0010;
+pub const STMT_FLAG_ONEOFF_CHARGED: u32   = 0b0000_0100;
+pub const STMT_FLAG_CANCELLED: u32        = 0b0000_1000;
+pub const STMT_FLAG_SETTLED: u32          = 0b0001_0000;
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
