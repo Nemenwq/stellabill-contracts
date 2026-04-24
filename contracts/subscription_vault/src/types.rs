@@ -532,6 +532,111 @@ pub struct BillingCompactedEvent {
     pub aggregate_newest_period_end: Option<u64>,
 }
 
+// ── Period-end billing statement types ───────────────────────────────────────
+
+/// Reason a period billing statement was finalized.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BillingStatementFinalization {
+    /// A recurring billing period closed normally after a successful charge.
+    PeriodClosed = 0,
+    /// The subscription was cancelled; this covers the current partial period.
+    Cancellation = 1,
+    /// Subscriber withdrew remaining prepaid balance; final net settlement recorded.
+    FinalSettlement = 2,
+}
+
+/// Lightweight index entry stored per-subscription and per-merchant.
+///
+/// Avoids scanning all contract state for pagination queries.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BillingStatementRef {
+    pub subscription_id: u32,
+    pub period_index: u32,
+    /// `period_end_timestamp` is stored here so time-range filters can run on
+    /// the index alone without loading each full statement.
+    pub period_end_timestamp: u64,
+}
+
+/// Grouped financial amounts for a single billing period.
+///
+/// Passed as a single parameter to [`SubscriptionVault::finalize_billing_statement`] so
+/// the function stays within Soroban's 10-parameter limit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeriodStatementAmounts {
+    /// Sum of all charges (interval + usage + one-off) debited this period.
+    pub total_amount_charged: i128,
+    /// Total metered usage units billed (0 for non-usage subscriptions).
+    pub total_usage_units: i128,
+    /// Protocol fee withheld from the charge (0 if disabled).
+    pub protocol_fee_amount: i128,
+    /// Net amount credited to the merchant after fees.
+    pub net_amount_to_merchant: i128,
+    /// Total refunded to the subscriber this period.
+    pub refund_amount: i128,
+}
+
+/// Compact per-period billing record written at period close, cancellation, or final settlement.
+///
+/// Indexed by `(subscription_id, period_index)`. Immutable once written; a
+/// subsequent upsert with the same key replaces the record and updates indices.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PeriodBillingStatement {
+    pub subscription_id: u32,
+    /// Monotonic period counter for this subscription (0-indexed from creation).
+    pub period_index: u32,
+    /// Period index of the associated billing snapshot, if any.
+    pub snapshot_period_index: u32,
+    pub merchant: Address,
+    pub subscriber: Address,
+    pub token: Address,
+    pub period_start_timestamp: u64,
+    pub period_end_timestamp: u64,
+    /// Sum of all charges (interval + usage + one-off) debited this period.
+    pub total_amount_charged: i128,
+    /// Total metered usage units billed this period (0 for non-usage subscriptions).
+    pub total_usage_units: i128,
+    /// Protocol fee withheld from the charge (0 if fee routing is disabled).
+    pub protocol_fee_amount: i128,
+    /// Net amount credited to the merchant after fees.
+    pub net_amount_to_merchant: i128,
+    /// Total amount refunded to the subscriber in this period.
+    pub refund_amount: i128,
+    /// Bit flags encoding per-period status. See `docs/billing_statements.md`.
+    pub status_flags: u32,
+    pub subscription_status: SubscriptionStatus,
+    pub finalized_by: BillingStatementFinalization,
+    pub finalized_at: u64,
+}
+
+/// Event emitted each time a period billing statement is written or overwritten.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BillingStatementPersistedEvent {
+    pub subscription_id: u32,
+    pub period_index: u32,
+    pub merchant: Address,
+    pub finalized_by: BillingStatementFinalization,
+}
+
+// ── status_flags bit constants (used by PeriodBillingStatement.status_flags) ─
+
+/// Period had at least one interval charge.
+pub const STMT_FLAG_INTERVAL_CHARGED: u32 = 0b0000_0001;
+/// Period had at least one usage charge.
+pub const STMT_FLAG_USAGE_CHARGED: u32    = 0b0000_0010;
+/// Period had at least one one-off charge.
+pub const STMT_FLAG_ONEOFF_CHARGED: u32   = 0b0000_0100;
+/// Subscription was cancelled during this period.
+pub const STMT_FLAG_CANCELLED: u32        = 0b0000_1000;
+/// Subscriber withdrew remaining balance; period is fully settled.
+pub const STMT_FLAG_SETTLED: u32          = 0b0001_0000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Optional oracle pricing configuration for cross-currency plans.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

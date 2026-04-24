@@ -73,6 +73,7 @@
 // ── Modules ──────────────────────────────────────────────────────────────────
 mod accounting;
 mod admin;
+mod billing_statements;
 mod blocklist;
 mod charge_core;
 mod merchant;
@@ -115,6 +116,8 @@ mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
 #[cfg(test)]
+mod test_billing_statements;
+#[cfg(test)]
 mod test_migration_fixtures;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
@@ -126,7 +129,11 @@ pub use state_machine::{can_transition, get_allowed_transitions, validate_status
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
     BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
+    BillingStatement, BillingStatementAggregate, BillingStatementFinalization,
+    BillingStatementPersistedEvent, BillingStatementRef, BillingStatementsPage, CapInfo,
+    PeriodBillingStatement, PeriodStatementAmounts, STMT_FLAG_CANCELLED,
+    STMT_FLAG_INTERVAL_CHARGED, STMT_FLAG_ONEOFF_CHARGED, STMT_FLAG_SETTLED,
+    STMT_FLAG_USAGE_CHARGED,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
@@ -1647,6 +1654,129 @@ impl SubscriptionVault {
             },
         );
         Ok(summary)
+    }
+
+    // ── Period billing statement queries ─────────────────────────────────────
+
+    /// Fetch a single period billing statement by subscription and period index.
+    ///
+    /// Period statements are written at period close, cancellation, or final
+    /// settlement. Use `get_sub_statements_offset` / `get_sub_statements_cursor`
+    /// for the lower-level per-charge audit trail.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::NotFound`] — no statement exists for `(subscription_id, period_index)`.
+    pub fn get_billing_statement(
+        env: Env,
+        subscription_id: u32,
+        period_index: u32,
+    ) -> Result<PeriodBillingStatement, Error> {
+        billing_statements::get_statement(&env, subscription_id, period_index)
+    }
+
+    /// List period billing statements for a subscription, oldest first.
+    ///
+    /// * `start` — zero-based offset into the statement index.
+    /// * `limit` — maximum records to return (0 returns an empty vec).
+    ///
+    /// Returns an empty vec when there are no statements or `start` exceeds
+    /// the number of recorded periods.
+    pub fn get_bill_stmts_by_sub(
+        env: Env,
+        subscription_id: u32,
+        start: u32,
+        limit: u32,
+    ) -> Vec<PeriodBillingStatement> {
+        billing_statements::list_statements_by_subscription(&env, subscription_id, start, limit)
+    }
+
+    /// List period billing statements for a merchant filtered by period end time.
+    ///
+    /// Returns statements whose `period_end_timestamp` falls in
+    /// `[start_timestamp, end_timestamp]` (both inclusive), paginated by
+    /// `start` / `limit` within that filtered set.
+    ///
+    /// `start_timestamp == 0` and `end_timestamp == u64::MAX` returns all statements
+    /// for the merchant.
+    pub fn get_bill_stmts_by_merch_rng(
+        env: Env,
+        merchant: Address,
+        start_timestamp: u64,
+        end_timestamp: u64,
+        start: u32,
+        limit: u32,
+    ) -> Vec<PeriodBillingStatement> {
+        billing_statements::list_statements_by_merchant_time_range(
+            &env,
+            merchant,
+            start_timestamp,
+            end_timestamp,
+            start,
+            limit,
+        )
+    }
+
+    /// Write or overwrite a period billing statement.
+    ///
+    /// Admin-only. Intended for off-chain tooling (indexers, migration scripts)
+    /// that computes period summaries and persists them on-chain for UI queries.
+    /// The `subscription_status` is resolved automatically from live subscription
+    /// storage; callers do not need to supply it.
+    ///
+    /// Financial amounts are grouped into a single [`PeriodStatementAmounts`] struct
+    /// to stay within Soroban's 10-parameter contract function limit.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — caller is not the stored admin.
+    /// * [`Error::NotInitialized`] — contract token address not set.
+    /// * [`Error::NotFound`] — subscription does not exist.
+    ///
+    /// # Events
+    ///
+    /// Emits `bill_stmt` with [`BillingStatementPersistedEvent`].
+    pub fn finalize_billing_statement(
+        env: Env,
+        admin: Address,            // 1
+        subscription_id: u32,      // 2
+        period_index: u32,         // 3
+        subscriber: Address,       // 4
+        merchant: Address,         // 5
+        period_start_timestamp: u64, // 6
+        period_end_timestamp: u64, // 7
+        amounts: PeriodStatementAmounts, // 8
+        status_flags: u32,         // 9
+        finalized_by: BillingStatementFinalization, // 10
+    ) -> Result<(), Error> {
+        require_admin_auth(&env, &admin)?;
+        let sub = queries::get_subscription(&env, subscription_id)?;
+        let stmt = billing_statements::build_period_statement(
+            &env,
+            billing_statements::PeriodStatementInput {
+                subscription_id,
+                period_index,
+                merchant,
+                subscriber,
+                period_start_timestamp,
+                period_end_timestamp,
+                total_amount_charged: amounts.total_amount_charged,
+                total_usage_units: amounts.total_usage_units,
+                protocol_fee_amount: amounts.protocol_fee_amount,
+                net_amount_to_merchant: amounts.net_amount_to_merchant,
+                refund_amount: amounts.refund_amount,
+                status_flags,
+                subscription_status: sub.status,
+                finalized_by,
+                finalized_at: env.ledger().timestamp(),
+            },
+        )?;
+        billing_statements::upsert_statement(&env, stmt);
+        Ok(())
     }
 
 /// Configure price oracle integration.
