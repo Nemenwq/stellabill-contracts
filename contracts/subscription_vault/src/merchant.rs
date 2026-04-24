@@ -2,15 +2,23 @@
 //!
 //! # Reentrancy Protection
 //!
-//! This module contains a critical external call: `withdraw_merchant_funds` transfers
-//! USDC tokens to the merchant via `token.transfer()`. The implementation follows the
-//! **Checks-Effects-Interactions (CEI)** pattern to prevent reentrancy attacks:
+//! This module contains critical external calls for fund transfers:
+//! - `withdraw_merchant_funds`: transfers USDC to merchant via `token.transfer()`
+//! - `withdraw_merchant_funds_for_token`: transfers custom tokens to merchant
+//! - `merchant_refund`: transfers tokens from merchant to subscriber
+//!
+//! All functions follow the **Checks-Effects-Interactions (CEI)** pattern:
 //!
 //! 1. **Checks**: Validate merchant authorization and sufficient balance
-//! 2. **Effects**: Update internal merchant balance in contract storage
-//! 3. **Interactions**: Call token.transfer() AFTER state is consistent
+//! 2. **Effects**: Update internal state (merchant balance, earnings) in storage
+//! 3. **Interactions**: Call token.transfer() AFTER state is consistent and persisted
 //!
-//! See `docs/reentrancy.md` for details on the reentrancy threat model and mitigation.
+//! **Guard layer**: Public entry-points in `lib.rs` acquire a `ReentrancyGuard` before
+//! calling these internal helpers, providing defense-in-depth protection against
+//! potential callbacks during token transfers.
+//!
+//! See `docs/reentrancy.md` and `docs/reentrancy_hardening.md` for full details on
+//! the reentrancy threat model and mitigation strategy.
 
 use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
 use crate::types::{
@@ -299,8 +307,15 @@ pub fn withdraw_merchant_funds_for_token(
     // ──────────────────────────────────────────────────────────────────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
-    env.events()
-        .publish((Symbol::new(env, "withdrawn"), merchant.clone()), amount);
+    env.events().publish(
+        (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
+        crate::types::MerchantWithdrawalEvent {
+            merchant: merchant.clone(),
+            token: token_addr.clone(),
+            amount,
+            remaining_balance: new_balance,
+        },
+    );
 
     // ──────────────────────────────────────────────────────────────────────────
     // INTERACTIONS: Only after internal state is consistent, call token contract
