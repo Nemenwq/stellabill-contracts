@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -274,6 +274,16 @@ pub enum Error {
     SelfRotation = 1036,
     /// The provided new admin address is invalid.
     InvalidNewAdmin = 1037,
+    /// Invalid fee percentage (exceeds 100%).
+    InvalidFeeBips = 1038,
+    /// Invalid payout address provided.
+    InvalidPayoutAddress = 1039,
+    /// Invalid allowed operations bitmap.
+    InvalidOperations = 1040,
+    /// Charge operation must be allowed for merchant to operate.
+    MustAllowChargeOperation = 1041,
+    /// Merchant config not found.
+    ConfigNotFound = 1042,
 }
 
 impl Error {
@@ -321,6 +331,11 @@ impl Error {
             Error::BurstLimitExceeded => 1035,
             Error::SelfRotation => 1036,
             Error::InvalidNewAdmin => 1037,
+            Error::InvalidFeeBips => 1038,
+            Error::InvalidPayoutAddress => 1039,
+            Error::InvalidOperations => 1040,
+            Error::MustAllowChargeOperation => 1041,
+            Error::ConfigNotFound => 1042,
         }
     }
 }
@@ -919,41 +934,79 @@ pub struct PartialRefundEvent {
     pub timestamp: u64,
 }
 
+/// Operation flags for merchant configuration.
+/// Each flag is a bit in the allowed_operations bitmap.
+pub const OP_CHARGE: i32 = 1 << 0; // 0x01 - Can charge subscribers
+pub const OP_WITHDRAW: i32 = 1 << 1; // 0x02 - Can withdraw earnings
+pub const OP_REFUND: i32 = 1 << 2; // 0x04 - Can issue refunds to subscribers
+pub const OP_BILLING_PAUSE: i32 = 1 << 3; // 0x08 - Can pause subscriptions globally
+pub const OP_AUTO_RENEWAL: i32 = 1 << 4; // 0x10 - Auto-renewal enabled
+
+/// Default allowed operations for a new merchant config.
+pub const DEFAULT_ALLOWED_OPS: i32 = OP_CHARGE | OP_WITHDRAW | OP_REFUND | OP_AUTO_RENEWAL;
+
+/// Maximum fee in bips (100% = 10000 bips).
+pub const MAX_FEE_BIPS: i32 = 10000;
+
+/// Validates that the allowed_operations bitmap contains only valid operation bits.
+pub fn is_valid_allowed_operations(ops: i32) -> bool {
+    let valid_mask = OP_CHARGE | OP_WITHDRAW | OP_REFUND | OP_BILLING_PAUSE | OP_AUTO_RENEWAL;
+    ops & !valid_mask == 0
+}
+
+/// Extended merchant configuration with payout settings and operational flags.
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub struct MerchantConfig {
+    /// Version for forward-compatible config upgrades.
+    pub version: i32,
+    /// Address where merchant receives payouts.
+    pub payout_address: Address,
+    /// Fee percentage in bips (0-10000, where 10000 = 100%).
+    pub fee_bips: i32,
+    /// Bitmap of allowed operations (see OP_* constants).
+    pub allowed_operations: i32,
+    /// Whether the merchant can receive charges and payouts.
+    pub is_active: bool,
+    /// Address for fee routing (optional).
     pub fee_address: Option<Address>,
-    pub redirect_url: String, // e.g., for off-chain success callbacks
-    pub is_paused: bool,      // Global pause for all merchant plans
+    /// Redirect URL for off-chain callbacks.
+    pub redirect_url: String,
+    /// Global pause for all merchant plans (legacy, prefer is_active).
+    pub is_paused: bool,
+    /// Timestamp of last config update.
+    pub last_updated: u64,
 }
 
-/// Aggregated billing totals used in compaction and earnings records.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    pub interval: i128,
-    pub usage: i128,
-    pub one_off: i128,
+impl MerchantConfig {
+    pub fn new(env: &Env, payout_address: Address, fee_bips: i32) -> Self {
+        Self {
+            version: 1,
+            payout_address,
+            fee_bips,
+            allowed_operations: DEFAULT_ALLOWED_OPS,
+            is_active: true,
+            fee_address: None,
+            redirect_url: String::from_str(env, ""),
+            is_paused: false,
+            last_updated: 0,
+        }
+    }
 }
 
-/// Per-token earnings record for a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    pub accruals: AccruedTotals,
-    pub withdrawals: i128,
-    pub refunds: i128,
-}
-
-/// Reconciliation snapshot for a single token bucket held by a merchant.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    pub total_accruals: i128,
-    pub total_withdrawals: i128,
-    pub total_refunds: i128,
-    pub computed_balance: i128,
+/// Returns a default inactive merchant config.
+pub fn default_merchant_config(env: &Env) -> MerchantConfig {
+    MerchantConfig {
+        version: 1,
+        payout_address: env.current_contract_address(),
+        fee_bips: 0,
+        allowed_operations: DEFAULT_ALLOWED_OPS,
+        is_active: false,
+        fee_address: None,
+        redirect_url: String::from_str(env, ""),
+        is_paused: false,
+        last_updated: 0,
+    }
 }
 
 /// Event emitted when a merchant enables their blanket pause.
@@ -998,46 +1051,29 @@ pub struct ProtocolFeeChargedEvent {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
     pub fee_bps: u32,
     pub treasury: Option<Address>,
     pub timestamp: u64,
 }
-
-/// Breakdown of a merchant's accrued earnings by charge kind.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    /// Total earned from interval charges.
-    pub interval: i128,
-    /// Total earned from usage charges.
-    pub usage: i128,
-    /// Total earned from one-off charges.
-    pub one_off: i128,
+#[derive(Clone, Debug)]
+pub struct MerchantConfigInitializedEvent {
+    pub merchant: Address,
+    pub payout_address: Address,
+    pub fee_bips: i32,
+    pub allowed_operations: i32,
+    pub timestamp: u64,
 }
 
-/// Accumulated earnings for a merchant for a single token.
+/// Event emitted when merchant configuration is updated.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    /// Accrued charge totals broken down by kind.
-    pub accruals: AccruedTotals,
-    /// Total amount withdrawn by the merchant.
-    pub withdrawals: i128,
-    /// Total amount refunded to subscribers.
-    pub refunds: i128,
-}
-
-/// A reconciliation snapshot for one token, returned by `get_reconciliation_snapshot`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    /// Sum of all charges accrued (interval + usage + one_off).
-    pub total_accruals: i128,
-    /// Sum of all withdrawals.
-    pub total_withdrawals: i128,
-    /// Sum of all subscriber refunds.
-    pub total_refunds: i128,
-    /// Computed balance = total_accruals - withdrawals - refunds.
-    pub computed_balance: i128,
+#[derive(Clone, Debug)]
+pub struct MerchantConfigUpdatedEvent {
+    pub merchant: Address,
+    pub payout_address: Address,
+    pub fee_bips: i32,
+    pub allowed_operations: i32,
+    pub is_active: bool,
+    pub timestamp: u64,
 }

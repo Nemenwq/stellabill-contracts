@@ -91,8 +91,6 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
 mod test_expiration;
@@ -129,7 +127,8 @@ pub use types::{
     BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
     ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
-    MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
     OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
     ProtocolFeeConfiguredEvent, RecoveryEvent,
@@ -138,6 +137,8 @@ pub use types::{
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    OP_CHARGE, OP_WITHDRAW, OP_REFUND, OP_BILLING_PAUSE, OP_AUTO_RENEWAL, DEFAULT_ALLOWED_OPS,
+    is_valid_allowed_operations, MAX_FEE_BIPS,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -1963,6 +1964,54 @@ impl SubscriptionVault {
         blocklist::is_blocklisted(&env, &subscriber)
     }
 
+    /// Initialize merchant configuration with payout settings and operational flags.
+    ///
+    /// Creates a new merchant config record with validation. This is the recommended way
+    /// for merchants to set up their configuration before accepting subscriptions.
+    ///
+    /// # Arguments
+    ///
+    /// * `merchant` — Must authorize and must be the merchant's address.
+    /// * `payout_address` — Address where the merchant receives payouts.
+    /// * `fee_bips` — Fee percentage in bips (0-10000). 0 means no fee.
+    /// * `allowed_operations` — Bitmap of allowed operations (see OP_* constants).
+    /// * `fee_address` — Optional address for platform fee routing.
+    /// * `redirect_url` — URL for off-chain callbacks.
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must authorize.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::InvalidPayoutAddress`] — Payout address is zero.
+    /// * [`Error::InvalidFeeBips`] — Fee exceeds 100%.
+    /// * [`Error::InvalidOperations`] — Invalid operation bits.
+    /// * [`Error::MustAllowChargeOperation`] — CHARGE operation must be enabled.
+    ///
+    /// # Events
+    ///
+    /// Emits [`MerchantConfigInitializedEvent`].
+    pub fn initialize_merchant_config(
+        env: Env,
+        merchant: Address,
+        payout_address: Address,
+        fee_bips: i32,
+        allowed_operations: i32,
+        fee_address: Option<Address>,
+        redirect_url: String,
+    ) -> Result<MerchantConfig, Error> {
+        merchant::initialize_merchant_config(
+            &env,
+            merchant,
+            payout_address,
+            fee_bips,
+            allowed_operations,
+            fee_address,
+            redirect_url,
+        )
+    }
+
     /// Set global configuration for a merchant.
     ///
     /// Stores a [`MerchantConfig`] with optional fee routing, a redirect URL, and a
@@ -1973,9 +2022,7 @@ impl SubscriptionVault {
     /// # Arguments
     ///
     /// * `merchant` — Must authorize the transaction.
-    /// * `fee_address` — Optional address to receive a portion of charges (platform fee routing).
-    /// * `redirect_url` — Merchant-supplied URL used by off-chain frontends for post-payment redirects.
-    /// * `is_paused` — Convenience pause flag mirrored in config storage.
+    /// * `config` — Full MerchantConfig struct.
     ///
     /// # Auth
     ///
@@ -1984,19 +2031,65 @@ impl SubscriptionVault {
     /// # Errors
     ///
     /// * [`Error::Unauthorized`] — `merchant` auth failed.
+    /// * Validation errors from config.
     pub fn set_merchant_config(
         env: Env,
         merchant: Address,
-        fee_address: Option<Address>,
-        redirect_url: String,
-        is_paused: bool,
+        config: MerchantConfig,
     ) -> Result<(), Error> {
-        let config = crate::types::MerchantConfig {
-            fee_address,
-            redirect_url,
-            is_paused,
-        };
         merchant::set_merchant_config(&env, merchant, config)
+    }
+
+    /// Update merchant configuration with partial fields.
+    ///
+    /// Allows updating specific fields without replacing the entire config.
+    /// Unchanged fields retain their current values.
+    ///
+    /// # Arguments
+    ///
+    /// * `merchant` — Must authorize.
+    /// * `new_payout_address` — Optional new payout address.
+    /// * `new_fee_bips` — Optional new fee in bips.
+    /// * `new_allowed_operations` — Optional new operations bitmap.
+    /// * `new_is_active` — Optional active flag.
+    /// * `new_fee_address` — Optional new fee address.
+    /// * `new_redirect_url` — Optional new redirect URL.
+    /// * `new_is_paused` — Optional pause flag.
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must authorize.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::ConfigNotFound`] — Config not initialized.
+    /// * Validation errors for provided fields.
+    ///
+    /// # Events
+    ///
+    /// Emits [`MerchantConfigUpdatedEvent`].
+    pub fn update_merchant_config(
+        env: Env,
+        merchant: Address,
+        new_payout_address: Option<Address>,
+        new_fee_bips: Option<i32>,
+        new_allowed_operations: Option<i32>,
+        new_is_active: Option<bool>,
+        new_fee_address: Option<Option<Address>>,
+        new_redirect_url: Option<String>,
+        new_is_paused: Option<bool>,
+    ) -> Result<MerchantConfig, Error> {
+        merchant::update_merchant_config(
+            &env,
+            merchant,
+            new_payout_address,
+            new_fee_bips,
+            new_allowed_operations,
+            new_is_active,
+            new_fee_address,
+            new_redirect_url,
+            new_is_paused,
+        )
     }
 
     /// Return the global configuration for a merchant.

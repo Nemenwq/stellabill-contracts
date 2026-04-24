@@ -333,8 +333,8 @@ pub fn set_protocol_fee(
         (Symbol::new(env, "protocol_fee_configured"),),
         crate::types::ProtocolFeeConfiguredEvent {
             admin,
-            treasury,
             fee_bps,
+            treasury: Some(treasury),
             timestamp: env.ledger().timestamp(),
         },
     );
