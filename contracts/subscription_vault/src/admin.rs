@@ -278,8 +278,10 @@ pub fn do_recover_stranded_funds(
     let token_client = token::Client::new(env, &token);
     let contract_balance = token_client.balance(&env.current_contract_address());
     let accounted_balance = crate::accounting::get_total_accounted(env, &token);
-    
-    let recoverable = contract_balance.checked_sub(accounted_balance).ok_or(Error::Underflow)?;
+
+    let recoverable = contract_balance
+        .checked_sub(accounted_balance)
+        .ok_or(Error::Underflow)?;
     if amount > recoverable {
         return Err(Error::InsufficientBalance);
     }
@@ -332,9 +334,8 @@ pub fn set_protocol_fee(
     env.events().publish(
         (Symbol::new(env, "protocol_fee_configured"),),
         crate::types::ProtocolFeeConfiguredEvent {
-            admin,
-            treasury,
             fee_bps,
+            treasury: Some(treasury),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -351,7 +352,5 @@ pub fn get_protocol_fee_bps(env: &Env) -> u32 {
 
 /// Return the configured treasury address, or None if not set.
 pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get(&Symbol::new(env, "treasury"))
+    env.storage().instance().get(&Symbol::new(env, "treasury"))
 }

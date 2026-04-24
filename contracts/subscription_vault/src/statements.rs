@@ -180,7 +180,7 @@ pub fn compact_subscription_statements(
 
     // Consistency check
     if amount != (safe_add(safe_add(interval_amt, usage_amt)?, one_off_amt)?) {
-         return Err(Error::Underflow); // Or some other appropriate error
+        return Err(Error::Underflow); // Or some other appropriate error
     }
 
     let mut aggregate = get_compacted_aggregate(env, subscription_id);
@@ -190,7 +190,7 @@ pub fn compact_subscription_statements(
     aggregate.totals.interval = safe_add(aggregate.totals.interval, interval_amt)?;
     aggregate.totals.usage = safe_add(aggregate.totals.usage, usage_amt)?;
     aggregate.totals.one_off = safe_add(aggregate.totals.one_off, one_off_amt)?;
-    
+
     aggregate.oldest_period_start = match (aggregate.oldest_period_start, oldest) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (None, Some(b)) => Some(b),

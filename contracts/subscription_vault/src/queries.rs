@@ -272,9 +272,7 @@ pub fn list_subscriptions_by_subscriber(
     // Cap the scan window to MAX_SCAN_DEPTH IDs per call.
     // If the budget is exhausted before `limit` matches are found, `next_start_id`
     // is set to `scan_end` so the caller can resume from exactly where we stopped.
-    let scan_end: u32 = start_from_id
-        .saturating_add(MAX_SCAN_DEPTH)
-        .min(next_id);
+    let scan_end: u32 = start_from_id.saturating_add(MAX_SCAN_DEPTH).min(next_id);
 
     let mut subscription_ids = Vec::new(env);
     let mut next_start_id: Option<u32> = None;

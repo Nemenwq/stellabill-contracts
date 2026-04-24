@@ -18,7 +18,7 @@
 //!                    withdraw_merchant_funds ▼
 //!                               Merchant wallet
 //! ```
-//! 
+//!
 //! In simple terms:
 //! - Subscribers deposit funds into the vault
 //! - Charges are applied over time
@@ -85,15 +85,15 @@ pub mod safe_math;
 mod state_machine;
 mod statements;
 mod subscription;
-mod types;
-#[cfg(test)]
-mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
 #[cfg(test)]
 mod test_auth_fuzz;
+#[cfg(test)]
+mod test_deterministic_charging;
+#[cfg(test)]
+mod test_emergency_stop_lifetime_caps;
 #[cfg(test)]
 mod test_expiration;
 #[cfg(test)]
@@ -113,9 +113,8 @@ mod test_security;
 #[cfg(test)]
 mod test_usage_limits;
 #[cfg(test)]
-mod test_deterministic_charging;
-#[cfg(test)]
-mod test_emergency_stop_lifetime_caps;
+mod test_utils;
+mod types;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -131,9 +130,9 @@ pub use types::{
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
-    ProtocolFeeConfiguredEvent, RecoveryEvent,
-    RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
@@ -632,10 +631,10 @@ impl SubscriptionVault {
     ///  # Auth
     ///
     /// `subscriber` must authorize the transaction.
-    /// 
+    ///
     /// # Errors
     /// Returns [`Error::SubscriptionLimitReached`] if the contract has already allocated
-    /// [`MAX_SUBSCRIPTION_ID`] subscriptions and can issue no more unique IDs. 
+    /// [`MAX_SUBSCRIPTION_ID`] subscriptions and can issue no more unique IDs.
     pub fn create_subscription(
         env: Env,
         subscriber: Address,
@@ -659,21 +658,21 @@ impl SubscriptionVault {
         )
     }
 
-/// Creates a new subscription using a specific accepted token.
-///
-/// Works like `create_subscription`, but lets you choose the token instead
-/// of using the default one. The token must already be added to the accepted list.
-///
-/// Disabled when emergency stop is active.
-///
-/// # Errors
-/// - `EmergencyStopActive` if paused
-/// - `TokenNotAccepted` if token is not allowed
-/// - `InvalidAmount` / `InvalidInterval` for bad input
-/// - `Blocklisted` or `MerchantPaused` if restricted
-///
-/// # Returns
-/// The new subscription ID.
+    /// Creates a new subscription using a specific accepted token.
+    ///
+    /// Works like `create_subscription`, but lets you choose the token instead
+    /// of using the default one. The token must already be added to the accepted list.
+    ///
+    /// Disabled when emergency stop is active.
+    ///
+    /// # Errors
+    /// - `EmergencyStopActive` if paused
+    /// - `TokenNotAccepted` if token is not allowed
+    /// - `InvalidAmount` / `InvalidInterval` for bad input
+    /// - `Blocklisted` or `MerchantPaused` if restricted
+    ///
+    /// # Returns
+    /// The new subscription ID.
     #[allow(clippy::too_many_arguments)]
     pub fn create_subscription_with_token(
         env: Env,
@@ -739,10 +738,10 @@ impl SubscriptionVault {
         amount: i128,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
-        
+
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "deposit_funds")?;
-        
+
         subscription::do_deposit_funds(&env, subscription_id, subscriber, amount)
     }
 
@@ -901,19 +900,19 @@ impl SubscriptionVault {
         subscription::get_plan_template(&env, plan_template_id)
     }
 
-/// Updates a plan template by creating a new version.
-///
-/// This does not modify the existing one. Instead, it creates a new version
-/// and keeps the old one intact. Existing subscriptions continue using
-/// their current settings unless migrated.
-///
-/// # Errors
-/// - `NotFound` if template doesn’t exist
-/// - `Unauthorized` if not the owner
-/// - `InvalidAmount` / `InvalidInterval` for bad input
-///
-/// # Returns
-/// The new template version ID.
+    /// Updates a plan template by creating a new version.
+    ///
+    /// This does not modify the existing one. Instead, it creates a new version
+    /// and keeps the old one intact. Existing subscriptions continue using
+    /// their current settings unless migrated.
+    ///
+    /// # Errors
+    /// - `NotFound` if template doesn’t exist
+    /// - `Unauthorized` if not the owner
+    /// - `InvalidAmount` / `InvalidInterval` for bad input
+    ///
+    /// # Returns
+    /// The new template version ID.
     pub fn update_plan_template(
         env: Env,
         merchant: Address,
@@ -934,16 +933,16 @@ impl SubscriptionVault {
         )
     }
 
-/// Sets the max number of active subscriptions a user can have for a plan.
-///
-/// If `max_active` is `0`, there’s no limit. This is enforced when creating
-/// subscriptions from the plan.
-///
-/// Only the plan’s merchant can call this.
-///
-/// # Errors
-/// - `NotFound` if the plan doesn’t exist
-/// - `Unauthorized` if caller is not the merchant
+    /// Sets the max number of active subscriptions a user can have for a plan.
+    ///
+    /// If `max_active` is `0`, there’s no limit. This is enforced when creating
+    /// subscriptions from the plan.
+    ///
+    /// Only the plan’s merchant can call this.
+    ///
+    /// # Errors
+    /// - `NotFound` if the plan doesn’t exist
+    /// - `Unauthorized` if caller is not the merchant
     pub fn set_plan_max_active_subs(
         env: Env,
         merchant: Address,
@@ -1065,7 +1064,7 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_subscriber_funds")?;
-        
+
         subscription::do_withdraw_subscriber_funds(&env, subscription_id, subscriber)
     }
 
@@ -1088,18 +1087,18 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "partial_refund")?;
-        
+
         subscription::do_partial_refund(&env, admin, subscription_id, subscriber, amount)
     }
 
-/// Pauses a subscription so it won’t be charged.
-///
-/// Can be resumed later.
-///
-/// # Errors
-/// - `NotFound` if subscription doesn’t exist
-/// - `Unauthorized` if caller is not subscriber or merchant
-/// - `InvalidStatusTransition` if not active
+    /// Pauses a subscription so it won’t be charged.
+    ///
+    /// Can be resumed later.
+    ///
+    /// # Errors
+    /// - `NotFound` if subscription doesn’t exist
+    /// - `Unauthorized` if caller is not subscriber or merchant
+    /// - `InvalidStatusTransition` if not active
     pub fn pause_subscription(
         env: Env,
         subscription_id: u32,
@@ -1167,10 +1166,10 @@ impl SubscriptionVault {
         amount: i128,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
-        
+
         // Acquire reentrancy guard
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_one_off")?;
-        
+
         subscription::do_charge_one_off(&env, subscription_id, merchant, amount)
     }
 
@@ -1193,11 +1192,11 @@ impl SubscriptionVault {
         subscription_id: u32,
     ) -> Result<ChargeExecutionResult, Error> {
         require_not_emergency_stop(&env)?;
-        
+
         // Acquire reentrancy guard: prevents the same function from being called
         // recursively (e.g., if a malicious token contract tries to call back).
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_subscription")?;
-        
+
         charge_core::charge_one(&env, subscription_id, env.ledger().timestamp(), None)
     }
 
@@ -1211,10 +1210,10 @@ impl SubscriptionVault {
     /// Drop trait, guaranteeing cleanup.
     pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
-        
+
         // Acquire reentrancy guard
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage")?;
-        
+
         charge_core::charge_usage_one(
             &env,
             subscription_id,
@@ -1238,10 +1237,10 @@ impl SubscriptionVault {
         reference: String,
     ) -> Result<(), Error> {
         require_not_emergency_stop(&env)?;
-        
+
         // Acquire reentrancy guard
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "charge_usage_with_reference")?;
-        
+
         charge_core::charge_usage_one(&env, subscription_id, usage_amount, reference)
     }
 
@@ -1295,47 +1294,47 @@ impl SubscriptionVault {
 
     // ── Merchant ──────────────────────────────────────────────────────────────
 
-/// Lets a merchant withdraw earnings (default token) to their wallet.
-///
-/// Moves funds from the contract balance to the merchant.
-///
-/// # Arguments
-/// - `merchant`: must be the owner of the balance and authorize the call
-/// - `amount`: how much to withdraw (must be > 0 and within available balance)
-///
-/// # Errors
-/// - Unauthorized → if auth fails
-/// - InvalidAmount → if amount ≤ 0
-/// - InsufficientFunds → if balance is not enough
-///
-/// # Reentrancy Protection
-/// This function acquires a reentrancy guard to prevent recursive calls during
-/// token transfer. The guard is automatically released (even on error) via the
-/// Drop trait, guaranteeing cleanup.
+    /// Lets a merchant withdraw earnings (default token) to their wallet.
+    ///
+    /// Moves funds from the contract balance to the merchant.
+    ///
+    /// # Arguments
+    /// - `merchant`: must be the owner of the balance and authorize the call
+    /// - `amount`: how much to withdraw (must be > 0 and within available balance)
+    ///
+    /// # Errors
+    /// - Unauthorized → if auth fails
+    /// - InvalidAmount → if amount ≤ 0
+    /// - InsufficientFunds → if balance is not enough
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// token transfer. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn withdraw_merchant_funds(env: Env, merchant: Address, amount: i128) -> Result<(), Error> {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_funds")?;
-        
+
         merchant::withdraw_merchant_funds(&env, merchant, amount)
     }
 
-/// Withdraw earnings for a specific token.
-///
-/// Useful when the merchant works with multiple tokens.
-///
-/// # Arguments
-/// - `merchant`: must authorize
-/// - `token`: token to withdraw
-/// - `amount`: amount to withdraw
-///
-/// # Errors
-/// Same as default withdraw +
-/// - TokenNotAccepted → if token is not supported
-///
-/// # Reentrancy Protection
-/// This function acquires a reentrancy guard to prevent recursive calls during
-/// token transfer. The guard is automatically released (even on error) via the
-/// Drop trait, guaranteeing cleanup.
+    /// Withdraw earnings for a specific token.
+    ///
+    /// Useful when the merchant works with multiple tokens.
+    ///
+    /// # Arguments
+    /// - `merchant`: must authorize
+    /// - `token`: token to withdraw
+    /// - `amount`: amount to withdraw
+    ///
+    /// # Errors
+    /// Same as default withdraw +
+    /// - TokenNotAccepted → if token is not supported
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// token transfer. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn withdraw_merchant_token_funds(
         env: Env,
         merchant: Address,
@@ -1343,8 +1342,9 @@ impl SubscriptionVault {
         amount: i128,
     ) -> Result<(), Error> {
         // Acquire reentrancy guard: prevents re-entry during token transfer
-        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_token_funds")?;
-        
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "withdraw_merchant_token_funds")?;
+
         merchant::withdraw_merchant_funds_for_token(&env, merchant, token, amount)
     }
 
@@ -1363,44 +1363,44 @@ impl SubscriptionVault {
         merchant::get_merchant_paused(&env, merchant)
     }
 
-/// Pause all subscriptions for a merchant.
-///
-/// Stops charges and prevents new subscriptions.
-/// Acts like a soft emergency stop for just this merchant.
-///
-/// # Auth
-/// merchant must authorize
+    /// Pause all subscriptions for a merchant.
+    ///
+    /// Stops charges and prevents new subscriptions.
+    /// Acts like a soft emergency stop for just this merchant.
+    ///
+    /// # Auth
+    /// merchant must authorize
     pub fn pause_merchant(env: Env, merchant: Address) -> Result<(), Error> {
         merchant::pause_merchant(&env, merchant)
     }
 
-/// Resume merchant activity after a pause.
-///
-/// # Auth
-/// - merchant must authorize
+    /// Resume merchant activity after a pause.
+    ///
+    /// # Auth
+    /// - merchant must authorize
     pub fn unpause_merchant(env: Env, merchant: Address) -> Result<(), Error> {
         merchant::unpause_merchant(&env, merchant)
     }
 
-/// Refund a subscriber directly from the merchant’s balance.
-///
-/// Useful for customer support refunds without cancelling the subscription.
-///
-/// # Arguments
-/// - `merchant`: must authorize
-/// - `subscriber`: receiver of funds
-/// - `token`: token used
-/// - `amount`: refund amount
-///
-/// # Errors
-/// - Unauthorized
-/// - InvalidAmount
-/// - InsufficientFunds
-///
-/// # Reentrancy Protection
-/// This function acquires a reentrancy guard to prevent recursive calls during
-/// token transfer. The guard is automatically released (even on error) via the
-/// Drop trait, guaranteeing cleanup.
+    /// Refund a subscriber directly from the merchant’s balance.
+    ///
+    /// Useful for customer support refunds without cancelling the subscription.
+    ///
+    /// # Arguments
+    /// - `merchant`: must authorize
+    /// - `subscriber`: receiver of funds
+    /// - `token`: token used
+    /// - `amount`: refund amount
+    ///
+    /// # Errors
+    /// - Unauthorized
+    /// - InvalidAmount
+    /// - InsufficientFunds
+    ///
+    /// # Reentrancy Protection
+    /// This function acquires a reentrancy guard to prevent recursive calls during
+    /// token transfer. The guard is automatically released (even on error) via the
+    /// Drop trait, guaranteeing cleanup.
     pub fn merchant_refund(
         env: Env,
         merchant: Address,
@@ -1410,7 +1410,7 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         // Acquire reentrancy guard: prevents re-entry during token transfer
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "merchant_refund")?;
-        
+
         merchant::merchant_refund(&env, merchant, subscriber, token, amount)
     }
 
@@ -1422,9 +1422,9 @@ impl SubscriptionVault {
         merchant::get_reconciliation_snapshot(&env, &merchant)
     }
 
-/// Get total earnings per token for a merchant.
-///
-/// Includes total charged, withdrawn, and current balance.
+    /// Get total earnings per token for a merchant.
+    ///
+    /// Includes total charged, withdrawn, and current balance.
     pub fn get_merchant_total_earnings(
         env: Env,
         merchant: Address,
@@ -1434,25 +1434,25 @@ impl SubscriptionVault {
 
     // ── Queries ──────────────────────────────────────────────────────────────
 
-/// Get a subscription by ID.
-///
-/// Returns the full [`Subscription`] data.
-///
-/// # Errors
-/// - NotFound → if the subscription doesn’t exist
+    /// Get a subscription by ID.
+    ///
+    /// Returns the full [`Subscription`] data.
+    ///
+    /// # Errors
+    /// - NotFound → if the subscription doesn’t exist
     pub fn get_subscription(env: Env, subscription_id: u32) -> Result<Subscription, Error> {
         queries::get_subscription(&env, subscription_id)
     }
 
-/// Estimate how much to top up for future billing cycles.
-///
-/// Calculates how much is needed to cover `num_intervals`,
-/// taking the current prepaid balance into account.
-/// Returns 0 if already covered.
-///
-/// # Errors
-/// - NotFound → subscription doesn’t exist
-/// - Overflow → calculation overflow
+    /// Estimate how much to top up for future billing cycles.
+    ///
+    /// Calculates how much is needed to cover `num_intervals`,
+    /// taking the current prepaid balance into account.
+    /// Returns 0 if already covered.
+    ///
+    /// # Errors
+    /// - NotFound → subscription doesn’t exist
+    /// - Overflow → calculation overflow
     pub fn estimate_topup_for_intervals(
         env: Env,
         subscription_id: u32,
@@ -1461,12 +1461,12 @@ impl SubscriptionVault {
         queries::estimate_topup_for_intervals(&env, subscription_id, num_intervals)
     }
 
-/// Get info about the next charge timing.
-///
-/// Includes when the next charge is expected and whether it’s due.
-///
-/// # Errors
-/// NotFound → subscription doesn’t exist.
+    /// Get info about the next charge timing.
+    ///
+    /// Includes when the next charge is expected and whether it’s due.
+    ///
+    /// # Errors
+    /// NotFound → subscription doesn’t exist.
     pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
         let sub = queries::get_subscription(&env, subscription_id)?;
         Ok(compute_next_charge_info(&sub))
@@ -1500,10 +1500,10 @@ impl SubscriptionVault {
         queries::get_token_subscription_count(&env, token)
     }
 
-/// List subscriptions for a subscriber (cursor-based).
-///
-/// # Errors
-/// - InvalidPageSize → if limit is invalid
+    /// List subscriptions for a subscriber (cursor-based).
+    ///
+    /// # Errors
+    /// - InvalidPageSize → if limit is invalid
     pub fn list_subscriptions_by_subscriber(
         env: Env,
         subscriber: Address,
@@ -1562,14 +1562,14 @@ impl SubscriptionVault {
         )
     }
 
-/// Add a new accepted token.
-///
-/// # Auth
-/// - Admin only
-///
-/// # Errors
-/// - Unauthorized
-/// - TokenAlreadyAccepted
+    /// Add a new accepted token.
+    ///
+    /// # Auth
+    /// - Admin only
+    ///
+    /// # Errors
+    /// - Unauthorized
+    /// - TokenAlreadyAccepted
     pub fn add_accepted_token(
         env: Env,
         admin: Address,
@@ -1579,14 +1579,14 @@ impl SubscriptionVault {
         admin::add_accepted_token(&env, admin, token, decimals)
     }
 
-/// Remove a token from accepted list.
-///
-/// Existing subscriptions are unaffected.
-///
-/// # Errors
-/// - Unauthorized
-/// - NotFound
-/// - CannotRemoveDefaultToken
+    /// Remove a token from accepted list.
+    ///
+    /// Existing subscriptions are unaffected.
+    ///
+    /// # Errors
+    /// - Unauthorized
+    /// - NotFound
+    /// - CannotRemoveDefaultToken
     pub fn remove_accepted_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin::remove_accepted_token(&env, admin, token)
     }
@@ -1669,7 +1669,7 @@ impl SubscriptionVault {
         statements::get_compacted_aggregate(&env, subscription_id)
     }
 
-     /// Compact (prune) billing statements for one subscription.
+    /// Compact (prune) billing statements for one subscription.
     ///
     /// Removes rows older than the retention window, accumulating their totals into
     /// the aggregate. The compacted totals remain queryable via
@@ -1731,14 +1731,14 @@ impl SubscriptionVault {
         Ok(summary)
     }
 
-/// Configure price oracle integration.
-///
-/// # Auth
-/// - Admin only
-///
-/// # Errors
-/// - Unauthorized
-/// - InvalidConfig
+    /// Configure price oracle integration.
+    ///
+    /// # Auth
+    /// - Admin only
+    ///
+    /// # Errors
+    /// - Unauthorized
+    /// - InvalidConfig
     pub fn set_oracle_config(
         env: Env,
         admin: Address,
@@ -1757,7 +1757,7 @@ impl SubscriptionVault {
 
     // ── Metadata ──────────────────────────────────────────────────────────────
 
-/// Set or update a metadata key-value pair on a subscription.
+    /// Set or update a metadata key-value pair on a subscription.
     ///
     /// Metadata is an arbitrary key-value store attached to a subscription for
     /// off-chain use cases (e.g., plan names, customer notes, external IDs). It does
@@ -1910,7 +1910,6 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         blocklist::do_add_to_blocklist(&env, authorizer, subscriber, reason)
     }
-    
 
     /// Remove a subscriber from the blocklist.
     ///
@@ -1940,7 +1939,7 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         blocklist::do_remove_from_blocklist(&env, admin, subscriber)
     }
-    
+
     /// Return the blocklist entry for a subscriber.
     ///
     /// # Arguments
@@ -1953,7 +1952,7 @@ impl SubscriptionVault {
     pub fn get_blocklist_entry(env: Env, subscriber: Address) -> Result<BlocklistEntry, Error> {
         blocklist::get_blocklist_entry(&env, subscriber)
     }
-    
+
     /// Return `true` if `subscriber` is on the blocklist.
     ///
     /// # Arguments

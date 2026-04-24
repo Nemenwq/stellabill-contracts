@@ -1,4 +1,6 @@
-use crate::{ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
+use crate::{
+    ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env};
 
@@ -26,7 +28,15 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address) {
 fn create_subscription(env: &Env, client: &SubscriptionVaultClient) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
-    let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
     (id, subscriber, merchant)
 }
 
@@ -145,5 +155,3 @@ fn cancel_from_insufficient_balance_succeeds() {
         SubscriptionStatus::Cancelled
     );
 }
-
-

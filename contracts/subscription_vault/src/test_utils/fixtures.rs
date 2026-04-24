@@ -32,7 +32,9 @@ pub fn create_subscription_detailed(
         &amount,
         &interval,
         &false,
-        &None::<i128>, &None::<u64>);
+        &None::<i128>,
+        &None::<u64>,
+    );
 
     if status != SubscriptionStatus::Active {
         patch_status(env, client, id, status);
@@ -55,7 +57,9 @@ pub fn create_subscription_with_merchant(
         &DEFAULT_AMOUNT,
         &DEFAULT_INTERVAL,
         &false,
-        &None::<i128>, &None::<u64>);
+        &None::<i128>,
+        &None::<u64>,
+    );
 
     if status != SubscriptionStatus::Active {
         patch_status(env, client, id, status);

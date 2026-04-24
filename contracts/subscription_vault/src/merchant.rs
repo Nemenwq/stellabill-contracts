@@ -308,7 +308,11 @@ pub fn withdraw_merchant_funds_for_token(
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     env.events().publish(
-        (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
+        (
+            Symbol::new(env, "withdrawn"),
+            merchant.clone(),
+            token_addr.clone(),
+        ),
         crate::types::MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
