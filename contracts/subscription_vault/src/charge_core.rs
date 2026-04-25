@@ -9,6 +9,24 @@
 //! See `docs/lifetime_caps.md` for cap enforcement semantics.
 //!
 //! **PRs that only change how one subscription is charged should edit this file only.**
+//!
+//! # Reentrancy Safety
+//!
+//! This module does **not make external token transfers**. All state mutations happen
+//! before any external interactions:
+//!
+//! 1. **Checks**: Validate expiration, status, interval, balance, replay protection, caps
+//! 2. **Effects**: Update subscription state AND merchant earnings in storage
+//! 3. **Interactions**: None (no external calls in this module)
+//!
+//! The public entry-point `lib.rs::charge_subscription` acquires a `ReentrancyGuard`
+//! before calling `charge_one`, providing defense-in-depth protection even though
+//! this function is naturally safe from external reentrancy.
+//!
+//! Merchant crediting happens through internal calls to `merchant::credit_merchant_balance_for_token`,
+//! which only updates storage and does not call external contracts.
+//!
+//! See `docs/reentrancy_hardening.md` for complete charge path analysis.
 
 #![allow(dead_code)]
 
@@ -129,13 +147,47 @@ pub fn charge_one(
     match safe_sub_balance(sub.prepaid_balance, charge_amount) {
         Ok(new_balance) => {
             sub.prepaid_balance = new_balance;
+            let fee_bps = crate::admin::get_protocol_fee_bps(env);
+            let treasury_opt = crate::admin::get_treasury(env);
+            let (merchant_amount, fee_amount) = if fee_bps > 0 {
+                if let Some(ref _t) = treasury_opt {
+                    let fee = charge_amount * fee_bps as i128 / 10_000i128;
+                    let net = charge_amount - fee;
+                    (net, fee)
+                } else {
+                    (charge_amount, 0i128)
+                }
+            } else {
+                (charge_amount, 0i128)
+            };
             crate::merchant::credit_merchant_balance_for_token(
                 env,
                 &sub.merchant,
                 &sub.token,
-                charge_amount,
+                merchant_amount,
                 BillingChargeKind::Interval,
             )?;
+            if fee_amount > 0 {
+                if let Some(ref treasury) = treasury_opt {
+                    crate::merchant::credit_merchant_balance_for_token(
+                        env,
+                        treasury,
+                        &sub.token,
+                        fee_amount,
+                        BillingChargeKind::Interval,
+                    )?;
+                    env.events().publish(
+                        (Symbol::new(env, "protocol_fee_charged"), subscription_id),
+                        crate::types::ProtocolFeeChargedEvent {
+                            subscription_id,
+                            treasury: treasury.clone(),
+                            fee_amount,
+                            merchant_amount,
+                            timestamp: now,
+                        },
+                    );
+                }
+            }
             sub.last_payment_timestamp = now;
 
             sub.lifetime_charged = safe_add(sub.lifetime_charged, charge_amount)?;
@@ -166,7 +218,7 @@ pub fn charge_one(
                 BillingChargeKind::Interval,
                 next_allowed.saturating_sub(sub.interval_seconds),
                 now,
-            );
+            )?;
 
             // Record charged period and optional idempotency key
             storage.set(&charged_period_key(subscription_id), &period_index);
@@ -430,7 +482,7 @@ pub fn charge_usage_one(
                 BillingChargeKind::Usage,
                 now,
                 now,
-            );
+            )?;
 
             env.events().publish(
                 (Symbol::new(env, "usage_charged"), subscription_id),
