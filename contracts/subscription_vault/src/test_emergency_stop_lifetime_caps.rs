@@ -2,7 +2,7 @@
 
 use crate::{ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{Address, Env, FromVal, String, Symbol, Val, Vec};
+use soroban_sdk::{Address, Env, FromVal, String, Symbol, TryFromVal, Val, Vec};
 
 const T0: u64 = 1_700_000_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -44,6 +44,7 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &INTERVAL,
         &true,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
 
@@ -65,7 +66,8 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &1_000_000i128,
             &INTERVAL,
             &false,
-            &None::<i128>
+            &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
@@ -77,7 +79,8 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
             &1_000_000i128,
             &INTERVAL,
             &false,
-            &None::<i128>
+            &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::EmergencyStopActive))
     );
@@ -166,6 +169,7 @@ fn test_emergency_stop_blocks_batch_charge() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -189,6 +193,7 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
         &INTERVAL,
         &false,
         &None::<i128>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -218,6 +223,7 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
         &INTERVAL,
         &false,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &(3 * amount));
 
@@ -257,6 +263,7 @@ fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
         &INTERVAL,
         &true,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
     client.charge_usage_with_reference(
@@ -287,6 +294,7 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         &INTERVAL,
         &true,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
 
@@ -325,9 +333,14 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() 
         &INTERVAL,
         &false,
         &Some(cap),
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
     client.charge_one_off(&sub_id, &merchant, &cap);
+
+    // Capture events immediately after the mutating call.
+    // In this test environment, subsequent view calls may reset the event buffer.
+    let events = env.events().all();
 
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
@@ -335,10 +348,59 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() 
     assert_eq!(sub.prepaid_balance, 15_000_000i128);
     assert_eq!(client.get_merchant_balance(&merchant), cap);
 
-    let events = env.events().all();
     let mut cap_events = 0u32;
+    let target = Symbol::new(&env, "lifetime_cap_reached");
+    let target_str = String::from_str(&env, "lifetime_cap_reached");
     for event in events.iter() {
-        if topic0(&env, &event) == Symbol::new(&env, "lifetime_cap_reached") {
+        let mut hit = false;
+        for topic in event.1.iter() {
+            if let Ok(sym) = Symbol::try_from_val(&env, &topic) {
+                if sym == target {
+                    hit = true;
+                    break;
+                }
+            }
+            if let Ok(s) = String::try_from_val(&env, &topic) {
+                if s == target_str {
+                    hit = true;
+                    break;
+                }
+            }
+            if let Ok((sym, _sub_id)) = <(Symbol, u32)>::try_from_val(&env, &topic) {
+                if sym == target {
+                    hit = true;
+                    break;
+                }
+            }
+            if let Ok((s, _sub_id)) = <(String, u32)>::try_from_val(&env, &topic) {
+                if s == target_str {
+                    hit = true;
+                    break;
+                }
+            }
+
+            // Some environments encode the full topic tuple as a single topic value.
+            // In that case, the topic itself may decode to a Vec<Val> where index 0
+            // is the symbol/string.
+            if let Ok(nested) = Vec::<Val>::try_from_val(&env, &topic) {
+                if let Some(n0) = nested.get(0) {
+                    if let Ok(sym) = Symbol::try_from_val(&env, &n0) {
+                        if sym == target {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if let Ok(s) = String::try_from_val(&env, &n0) {
+                        if s == target_str {
+                            hit = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if hit {
             cap_events += 1;
         }
     }

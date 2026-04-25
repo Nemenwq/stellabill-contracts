@@ -91,8 +91,6 @@ mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
-mod test_utils;
-#[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
 mod test_expiration;
@@ -136,7 +134,8 @@ pub use types::{
     RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
-    TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
+    TokenEarnings, TokenReconciliationSnapshot, UsageChargeRejectedEvent, UsageChargeResult,
+    UsageLimits, UsageLimitsConfiguredEvent, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
 };
 
@@ -1209,7 +1208,11 @@ impl SubscriptionVault {
     /// This function acquires a reentrancy guard to prevent recursive calls during
     /// state mutations. The guard is automatically released (even on error) via the
     /// Drop trait, guaranteeing cleanup.
-    pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
+    pub fn charge_usage(
+        env: Env,
+        subscription_id: u32,
+        usage_amount: i128,
+    ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
         
         // Acquire reentrancy guard
@@ -1236,7 +1239,7 @@ impl SubscriptionVault {
         subscription_id: u32,
         usage_amount: i128,
         reference: String,
-    ) -> Result<(), Error> {
+    ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
         
         // Acquire reentrancy guard

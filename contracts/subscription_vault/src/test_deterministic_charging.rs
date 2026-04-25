@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::test_utils::setup::TestEnv;
-use crate::types::{ChargeExecutionResult, Error};
+use crate::types::{ChargeExecutionResult, Error, UsageChargeResult};
 use soroban_sdk::{testutils::Address as _, Address, String};
 
 #[test]
@@ -54,7 +54,7 @@ fn test_usage_charge_determinism() {
 
     // Replay with identical reference should fail
     let res2 = test_env.client.try_charge_usage_with_reference(&sub_id, &usage_amount, &reference);
-    assert!(matches!(res2, Err(Ok(Error::Replay))));
+    assert!(matches!(res2, Ok(Ok(UsageChargeResult::Replay))));
 
     // Different reference at same timestamp should succeed
     let reference2 = String::from_str(&test_env.env, "req_124");
@@ -148,7 +148,7 @@ fn test_same_timestamp_repeated_calls() {
     let ref_str = String::from_str(&test_env.env, "t1");
     test_env.client.charge_usage_with_reference(&sub_id, &1, &ref_str);
     let res_usage_rep = test_env.client.try_charge_usage_with_reference(&sub_id, &1, &ref_str);
-    assert!(matches!(res_usage_rep, Err(Ok(Error::Replay))));
+    assert!(matches!(res_usage_rep, Ok(Ok(UsageChargeResult::Replay))));
 }
 
 #[test]

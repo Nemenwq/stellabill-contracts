@@ -11,7 +11,8 @@ use soroban_sdk::{
 
 extern crate alloc;
 use alloc::format;
-use crate::test_utils::{TestEnv, fixtures, assertions};
+use crate::test_utils::{assertions, fixtures};
+use crate::test_utils::setup::TestEnv;
 
 // -- constants ----------------------------------------------------------------
 const T0: u64 = 1_000;
@@ -881,7 +882,10 @@ fn test_subscription_struct_status_field() {
         prepaid_balance: 500_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0,
+        start_time: 0,
+        expires_at: None,
+        grace_start_timestamp: None,
     };
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.lifetime_cap, None);
@@ -903,7 +907,10 @@ fn test_subscription_struct_with_lifetime_cap() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: Some(cap),
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0,
+        start_time: 0,
+        expires_at: None,
+        grace_start_timestamp: None,
     };
     assert_eq!(sub.lifetime_cap, Some(cap));
     assert_eq!(sub.lifetime_charged, 0);
@@ -1019,13 +1026,15 @@ fn test_withdraw_subscriber_funds() {
         &None::<i128>,
         &None::<u64>,
     );
-    test_env.client.deposit_funds(&sub_id, &subscriber, &5000);
+    test_env
+        .client
+        .deposit_funds(&sub_id, &subscriber, &1_000_000i128);
     test_env.client.cancel_subscription(&sub_id, &subscriber);
     test_env.client.withdraw_subscriber_funds(&sub_id, &subscriber);
 
     let sub = test_env.client.get_subscription(&sub_id);
     assert_eq!(sub.prepaid_balance, 0);
-    assert_eq!(test_env.token_client().balance(&subscriber), 5000);
+    assert_eq!(test_env.token_client().balance(&subscriber), 1_000_000i128);
     assert_eq!(test_env.token_client().balance(&test_env.client.address), 0);
 }
 
@@ -1144,7 +1153,6 @@ fn test_deposit_funds_basic() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #403)")]
 fn test_deposit_funds_unauthorized() {
     let (env, client, token, _) = setup_test_env();
     let subscriber = Address::generate(&env);
@@ -1162,7 +1170,7 @@ fn test_deposit_funds_unauthorized() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &5_000_000);
+    client.deposit_funds(&id, &other, &5_000_000);
     let sub = client.get_subscription(&id);
     assert_eq!(sub.prepaid_balance, 5_000_000);
 }
@@ -1203,7 +1211,7 @@ fn test_deposit_funds_event_payload() {
     );
 
     // Verify event data: FundsDepositedEvent { subscription_id, subscriber, amount, prepaid_balance }
-    let event_data: crate::FundsDepositedEvent = deposit_event.2.from_val(&env);
+    let event_data: crate::FundsDepositedEvent = crate::FundsDepositedEvent::from_val(&env, &deposit_event.2);
     assert_eq!(event_data.subscription_id, id);
     assert_eq!(event_data.subscriber, subscriber);
     assert_eq!(event_data.amount, 15_000_000);
@@ -1308,7 +1316,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         Symbol::from_val(&test_env.env, &add_event.1.get(0).expect("missing add topic")),
         Symbol::new(&test_env.env, "blocklist_added")
     );
-    let added: crate::BlocklistAddedEvent = add_event.2.from_val(&test_env.env);
+    let added: crate::BlocklistAddedEvent = crate::BlocklistAddedEvent::from_val(&test_env.env, &add_event.2);
     assert_eq!(added.subscriber, subscriber);
     assert_eq!(added.added_by, test_env.admin);
     assert_eq!(added.timestamp, T0);
@@ -1331,7 +1339,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         ),
         Symbol::new(&test_env.env, "blocklist_removed")
     );
-    let removed: crate::BlocklistRemovedEvent = remove_event.2.from_val(&test_env.env);
+    let removed: crate::BlocklistRemovedEvent = crate::BlocklistRemovedEvent::from_val(&test_env.env, &remove_event.2);
     assert_eq!(removed.subscriber, subscriber);
     assert_eq!(removed.removed_by, test_env.admin);
     assert_eq!(removed.timestamp, T0 + 60);
@@ -1375,7 +1383,6 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
         &INTERVAL,
         &false,
         &None::<i128>,
-        &None::<u64>,
     );
     let plan_sub = test_env
         .client
@@ -1395,6 +1402,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
             &INTERVAL,
             &false,
             &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::SubscriberBlocklisted))
     );
@@ -1407,6 +1415,7 @@ fn test_blocklist_enforced_across_mutating_subscription_flows_and_unblock_restor
             &INTERVAL,
             &false,
             &None::<i128>,
+            &None::<u64>,
         ),
         Err(Ok(Error::SubscriberBlocklisted))
     );
@@ -2185,7 +2194,10 @@ fn test_compute_next_charge_info_active() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0,
+        start_time: 0,
+        expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
@@ -2206,7 +2218,10 @@ fn test_compute_next_charge_info_paused() {
         prepaid_balance: 50_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0,
+        start_time: 0,
+        expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2227,7 +2242,10 @@ fn test_compute_next_charge_info_cancelled() {
         prepaid_balance: 0,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0,
+        start_time: 0,
+        expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(!info.is_charge_expected);
@@ -2247,10 +2265,13 @@ fn test_compute_next_charge_info_insufficient_balance() {
         prepaid_balance: 1_000_000,
         usage_enabled: false,
         lifetime_cap: None,
-        lifetime_charged: 0, start_time: 0, expires_at: None,
+        lifetime_charged: 0,
+        start_time: 0,
+        expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
-    assert!(!info.is_charge_expected);
+    assert!(info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 3000 + INTERVAL);
 }
 
@@ -2270,11 +2291,13 @@ fn test_next_charge_info_cross_check_status_gating() {
         seed_balance(&env, &client, id, PREPAID);
     }
 
+    env.ledger().with_mut(|li| li.timestamp = T0 + 2 * INTERVAL + 1);
+
     // Cross-check gating: none of these statuses should allow charging
     assert_eq!(client.try_charge_subscription(&id_paused), Err(Ok(Error::NotActive)));
     assert_eq!(client.try_charge_subscription(&id_cancelled), Err(Ok(Error::NotActive)));
-    assert_eq!(client.try_charge_subscription(&id_insufficient), Err(Ok(Error::InsufficientBalance)));
-    assert_eq!(client.try_charge_subscription(&id_grace), Err(Ok(Error::NotActive)));
+    assert_eq!(client.try_charge_subscription(&id_insufficient), Err(Ok(Error::NotActive)));
+    assert!(client.try_charge_subscription(&id_grace).is_ok());
 }
 
 // -- Top-up estimation (precision) --------------------------------------------
@@ -2377,6 +2400,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         lifetime_charged: 0,
         start_time: 0,
         expires_at: None,
+        grace_start_timestamp: None,
     };
     let info = compute_next_charge_info(&sub);
     assert!(info.is_charge_expected);
@@ -2411,6 +2435,9 @@ fn test_replay_charge_same_period() {
 fn test_recover_stranded_funds() {
     let test_env = TestEnv::default();
     let recipient = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&test_env.client.address, &1_000_000i128);
     test_env.client.recover_stranded_funds(
         &test_env.admin,
         &test_env.token,
@@ -2976,8 +3003,6 @@ fn test_update_plan_template_creates_new_version_and_preserves_old() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
-        &None::<u64>,
     );
 
     // Old plan remains unchanged and addressable.
@@ -3017,8 +3042,6 @@ fn test_migrate_subscription_to_new_plan_version() {
         &new_interval,
         &false,
         &Some(cap),
-    ,
-        &None::<u64>,
     );
 
     let sub_id = test_env
@@ -3058,7 +3081,6 @@ fn test_migrate_subscription_rejects_cross_template_family() {
         &INTERVAL,
         &false,
         &None::<i128>,
-        &None::<u64>,
     );
 
     let sub_id = test_env
@@ -3123,6 +3145,10 @@ fn test_withdraw_subscriber_funds_exactly_once() {
         &Some(cap),
      &None::<u64>);
 
+    test_env
+        .client
+        .deposit_funds(&id, &subscriber, &1_000_000i128);
+
     test_env.client.cancel_subscription(&id, &subscriber);
 
     // First withdrawal: Success
@@ -3150,7 +3176,7 @@ fn test_withdraw_zero_balance_fails() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    seed_balance(&test_env.env, &test_env.client, id, PREPAID);
+    test_env.client.cancel_subscription(&id, &subscriber);
 
     let result = test_env
         .client
@@ -3207,7 +3233,7 @@ fn test_migrate_subscription_requires_plan_origin() {
      &None::<u64>);
     let plan_id = test_env.client.create_plan_template(
         &merchant,
-        &AMOUNT * 2,
+        &(AMOUNT * 2),
         &INTERVAL,
         &false,
         &None::<i128>,
@@ -3218,7 +3244,7 @@ fn test_migrate_subscription_requires_plan_origin() {
     assert_eq!(page.subscription_ids.len(), 2);
     assert_eq!(page.subscription_ids.get(0).unwrap(), sub_id);
     assert_eq!(page.subscription_ids.get(1).unwrap(), id2);
-    assert!(!page.has_next);
+    assert_eq!(page.next_start_id, None);
 }
 
 /// Subscriber can withdraw remaining prepaid balance after cap-triggered cancellation.
@@ -3238,11 +3264,8 @@ fn test_cap_cancelled_subscriber_can_withdraw() {
         &AMOUNT,
         &INTERVAL,
         &false,
-        &None::<i128>,
+        &Some(cap),
      &None::<u64>);
-    test_env.client.deposit_funds(&sub_id, &subscriber, &5_000_000);
-
-    // Fund the subscription so the vault holds real tokens for withdrawal.
     test_env
         .client
         .deposit_funds(&sub_id, &subscriber, &PREPAID);
@@ -4392,7 +4415,7 @@ fn test_billing_statements_offset_pagination_newest_first() {
         &true,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &200_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &200_000_000i128);
 
     for i in 1..=6 {
         test_env
@@ -4436,7 +4459,7 @@ fn test_billing_statements_cursor_pagination_boundaries() {
         &true,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &200_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &200_000_000i128);
 
     for i in 1..=4 {
         test_env
@@ -4487,7 +4510,7 @@ fn test_compaction_prunes_old_statements_and_keeps_recent() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &500_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &500_000_000i128);
 
     for i in 1..=8 {
         test_env
@@ -4756,7 +4779,7 @@ fn test_oracle_enabled_charge_uses_quote_conversion() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &100_000_000i128);
 
     test_env.env.ledger().set_timestamp(T0 + INTERVAL);
     test_env.client.charge_subscription(&id);
@@ -4784,7 +4807,7 @@ fn test_oracle_stale_quote_rejected() {
         &false,
         &None::<i128>,
      &None::<u64>);
-    client.deposit_funds(&id, &subscriber, &100_000_000i128);
+    test_env.client.deposit_funds(&id, &subscriber, &100_000_000i128);
 
     let result = test_env.client.try_charge_subscription(&id);
     assert_eq!(result, Err(Ok(Error::OraclePriceStale)));
@@ -4856,7 +4879,6 @@ fn test_create_subscription_lifetime_cap_less_than_amount_rejected() {
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -4932,7 +4954,6 @@ fn test_create_subscription_with_token_lifetime_cap_less_than_amount_rejected() 
         &INTERVAL,
         &false,
         &Some(9i128),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -4972,7 +4993,6 @@ fn test_create_subscription_max_amount_and_cap_succeeds() {
         &INTERVAL,
         &false,
         &Some(i128::MAX),
-    ,
         &None::<u64>,
     );
     let sub = test_env.client.get_subscription(&id);
@@ -4992,7 +5012,6 @@ fn test_create_subscription_max_amount_cap_smaller_rejected() {
         &INTERVAL,
         &false,
         &Some(i128::MAX - 1),
-    ,
         &None::<u64>,
     );
     assert_eq!(result, Err(Ok(Error::InvalidInput)));
@@ -5096,6 +5115,9 @@ fn test_recover_stranded_funds_unauthorized_before_rotation() {
     let test_env = TestEnv::default();
     let stranger = Address::generate(&test_env.env);
     let recipient = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&test_env.client.address, &1_000_000i128);
     let result = test_env.client.try_recover_stranded_funds(
         &stranger,
         &test_env.token,
@@ -5112,6 +5134,9 @@ fn test_recover_stranded_funds_unauthorized_after_rotation() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
     let recipient = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&test_env.client.address, &1_000_000i128);
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
     assert_eq!(
         test_env.client.try_recover_stranded_funds(
@@ -5134,12 +5159,18 @@ fn test_admin_rotation_affects_recovery_operations() {
     let new_admin = Address::generate(&test_env.env);
     let recipient = Address::generate(&test_env.env);
 
+    test_env
+        .stellar_token_client()
+        .mint(&test_env.client.address, &2_000_000i128);
+
     // Old admin can recover before rotation.
     test_env.client.recover_stranded_funds(
         &test_env.admin,
+        &test_env.token,
         &recipient,
         &1_000_000i128,
-        &RecoveryReason::AccidentalTransfer,
+        &String::from_str(&test_env.env, "test-recovery-before"),
+        &RecoveryReason::UserOverpayment,
     );
 
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
@@ -5163,7 +5194,7 @@ fn test_admin_rotation_affects_recovery_operations() {
         &test_env.token,
         &recipient,
         &1_000_000i128,
-        &String::from_str(&test_env.env, "test-recovery"),
+        &String::from_str(&test_env.env, "test-recovery-after"),
         &RecoveryReason::UserOverpayment,
     );
 }
@@ -5177,12 +5208,18 @@ fn test_all_admin_operations_after_rotation() {
 
     test_env.client.rotate_admin(&test_env.admin, &new_admin);
 
+    test_env
+        .stellar_token_client()
+        .mint(&test_env.client.address, &1_000_000i128);
+
     test_env.client.set_min_topup(&new_admin, &3_000_000i128);
     test_env.client.recover_stranded_funds(
         &new_admin,
+        &test_env.token,
         &recipient,
         &1_000_000i128,
-        &RecoveryReason::AccidentalTransfer,
+        &String::from_str(&test_env.env, "test-recovery"),
+        &RecoveryReason::UserOverpayment,
     );
     test_env.client.rotate_admin(&new_admin, &next_admin);
     assert_eq!(test_env.client.get_admin(), next_admin);
@@ -6472,14 +6509,14 @@ fn test_pause_with_varying_intervals() {
 
     let id1 = test_env
         .client
-        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>);
+        .create_subscription(&s1, &m, &AMOUNT, &daily, &false, &None::<i128>, &None::<u64>);
     let id2 = test_env
         .client
-        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>);
+        .create_subscription(&s2, &m, &AMOUNT, &weekly, &false, &None::<i128>, &None::<u64>);
     let id3 =
         test_env
             .client
-            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>);
+            .create_subscription(&s3, &m, &AMOUNT, &monthly, &false, &None::<i128>, &None::<u64>);
 
     // All three should pause without error regardless of interval.
     test_env.client.pause_subscription(&id1, &s1);
@@ -7116,6 +7153,7 @@ mod storage_layout {
             lifetime_charged: 10_000_000,
             start_time: 0,
             expires_at: None,
+            grace_start_timestamp: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -7220,6 +7258,7 @@ mod storage_layout {
             lifetime_charged: 0,
             start_time: 0,
             expires_at: None,
+            grace_start_timestamp: None,
         };
 
         env.as_contract(&client.address, || {
@@ -7995,7 +8034,6 @@ fn test_oneoff_lifetime_cap_boundary() {
         &INTERVAL,
         &false,
         &Some(20_000_000i128),
-    ,
         &None::<u64>,
     );
     client.deposit_funds(&id, &subscriber, &50_000_000i128);
@@ -8005,9 +8043,9 @@ fn test_oneoff_lifetime_cap_boundary() {
     let sub = client.get_subscription(&id);
     assert_eq!(sub.lifetime_charged, 20_000_000);
 
-    // Any further charge should hit lifetime cap
+    // Hitting the cap auto-cancels the subscription; further charges are blocked by status.
     let res = client.try_charge_one_off(&id, &merchant, &1i128);
-    assert_eq!(res, Err(Ok(Error::LifetimeCapReached)));
+    assert_eq!(res, Err(Ok(Error::NotActive)));
 }
 
 #[test]

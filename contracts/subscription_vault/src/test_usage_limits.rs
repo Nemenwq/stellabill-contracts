@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::{Error, SubscriptionVault, SubscriptionVaultClient};
+use crate::{Error, SubscriptionVault, SubscriptionVaultClient, UsageChargeResult};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String,
@@ -154,7 +154,7 @@ fn test_burst_usage_attempts() {
         &1_000_000i128,
         &String::from_str(&env, "ref2"),
     );
-    assert_eq!(result, Err(Ok(Error::BurstLimitExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::BurstLimitExceeded)));
 
     // 1 second later -> still fails
     env.ledger().set_timestamp(T0 + 1);
@@ -163,7 +163,7 @@ fn test_burst_usage_attempts() {
         &1_000_000i128,
         &String::from_str(&env, "ref3"),
     );
-    assert_eq!(result, Err(Ok(Error::BurstLimitExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::BurstLimitExceeded)));
 
     // 2 seconds later -> succeeds
     env.ledger().set_timestamp(T0 + 2);
@@ -200,7 +200,7 @@ fn test_rate_limit_violations() {
         &1_000_000i128,
         &String::from_str(&env, "ref4"),
     );
-    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::RateLimitExceeded)));
 
     // Move time forward past window
     env.ledger().set_timestamp(T0 + 60);
@@ -232,7 +232,7 @@ fn test_replay_attacks() {
         &1_000_000i128,
         &String::from_str(&env, "my-unique-ref"),
     );
-    assert_eq!(result, Err(Ok(Error::Replay)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::Replay)));
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn test_usage_cap_enforcement() {
         &5_000_000i128,
         &String::from_str(&env, "ref2"),
     );
-    assert_eq!(result, Err(Ok(Error::UsageCapExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::UsageCapExceeded)));
 
     // Another 4m is perfectly fine
     client.charge_usage_with_reference(&sub_id, &4_000_000i128, &String::from_str(&env, "ref3"));
