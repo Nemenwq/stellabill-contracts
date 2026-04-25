@@ -97,7 +97,7 @@ fn test_rotate_admin_unauthorized() {
     // We need to mock auth for the stranger to bypass the Auth check,
     // then the contract should fail with Error::Unauthorized (401).
     env.mock_all_auths();
-    client.rotate_admin(&stranger, &new_admin);
+    client.rotate_admin(&stranger, &new_admin, &0u64);
 }
 
 // ── Risk Class 3: Replay & Idempotency ────────────────────────────────────────
@@ -147,7 +147,7 @@ fn test_replay_protection_on_batch_charge() {
 
     // Batch charge with duplicate ID
     let ids = SorobanVec::from_array(&env, [id, id]);
-    let results = client.batch_charge(&ids);
+    let results = client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 2);
     assert!(results.get(0).unwrap().success);

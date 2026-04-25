@@ -79,7 +79,7 @@ fn test_multi_actor_batch_charge() {
         setup.subscriptions[3],
         setup.subscriptions[4],
     ];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 5);
 
@@ -132,7 +132,7 @@ fn test_multi_actor_mixed_charges() {
         setup.subscriptions[3],
         setup.subscriptions[4],
     ];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 5);
 
@@ -171,7 +171,7 @@ fn test_multi_actor_pause_and_resume_subset() {
         setup.subscriptions[1],
         setup.subscriptions[2],
     ];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.get(0).unwrap().success, false);
     assert_eq!(results.get(0).unwrap().error_code, Error::NotActive as u32);

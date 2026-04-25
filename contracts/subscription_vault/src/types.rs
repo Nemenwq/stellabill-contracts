@@ -53,6 +53,9 @@ pub enum DataKey {
     UsageLimits(u32),
     /// Running usage state for a subscription within the current window.
     UsageState(u32),
+    /// Monotonic nonce for replay protection, keyed by (signer, domain_tag).
+    /// `domain_tag` is a `u32` discriminant from [`nonce::DOMAIN_*`] constants.
+    AdminNonce(Address, u32),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -274,6 +277,8 @@ pub enum Error {
     SelfRotation = 1036,
     /// The provided new admin address is invalid.
     InvalidNewAdmin = 1037,
+    /// Nonce mismatch — the operation is a replay or uses an out-of-sequence nonce.
+    NonceAlreadyUsed = 1038,
 }
 
 impl Error {
@@ -321,8 +326,26 @@ impl Error {
             Error::BurstLimitExceeded => 1035,
             Error::SelfRotation => 1036,
             Error::InvalidNewAdmin => 1037,
+            Error::NonceAlreadyUsed => 1038,
         }
     }
+}
+
+/// Event emitted when an admin nonce is consumed by a privileged operation.
+///
+/// Allows off-chain indexers to track the nonce sequence for each signer/domain
+/// pair and detect anomalies such as gaps or unexpected resets.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct NonceConsumedEvent {
+    /// The admin address that consumed the nonce.
+    pub signer: Address,
+    /// Domain tag identifying the operation class (see `nonce::DOMAIN_*` constants).
+    pub domain: u32,
+    /// The nonce value that was consumed.
+    pub nonce: u64,
+    /// Ledger timestamp when the nonce was consumed.
+    pub timestamp: u64,
 }
 
 /// Result of charging one subscription in a batch.
