@@ -83,15 +83,14 @@ mod queries;
 mod reentrancy;
 pub mod safe_math;
 mod state_machine;
+mod period_snapshots;
 mod statements;
 mod subscription;
 mod types;
 #[cfg(test)]
-mod test_utils;
+pub mod test_utils;
 #[cfg(test)]
 mod test;
-#[cfg(test)]
-mod test_utils;
 #[cfg(test)]
 mod test_auth_fuzz;
 #[cfg(test)]
@@ -116,6 +115,8 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_billing_period_snapshots;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -125,9 +126,9 @@ pub use queries::{compute_next_charge_info, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIS
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
-    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
@@ -138,6 +139,8 @@ pub use types::{
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -174,7 +177,7 @@ fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
 fn get_emergency_stop(env: &Env) -> bool {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "emergency_stop"))
+        .get(&DataKey::EmergencyStop)
         .unwrap_or(false)
 }
 
@@ -358,7 +361,7 @@ impl SubscriptionVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "emergency_stop"), &true);
+            .set(&DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
             EmergencyStopEnabledEvent {
@@ -399,7 +402,7 @@ impl SubscriptionVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "emergency_stop"), &false);
+            .set(&DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
             EmergencyStopDisabledEvent {
@@ -440,13 +443,13 @@ impl SubscriptionVault {
         let token: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "token"))
+            .get(&DataKey::Token)
             .ok_or(Error::NotFound)?;
         let min_topup: i128 = admin::get_min_topup(&env)?;
         let next_id: u32 = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "next_id"))
+            .get(&DataKey::NextId)
             .unwrap_or(0);
 
         env.events().publish(
@@ -569,7 +572,7 @@ impl SubscriptionVault {
         let next_id: u32 = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "next_id"))
+            .get(&DataKey::NextId)
             .unwrap_or(0);
         if start_id >= next_id {
             return Ok(Vec::new(&env));
@@ -580,7 +583,7 @@ impl SubscriptionVault {
         let mut exported = 0u32;
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+            if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
                 out.push_back(SubscriptionSummary {
                     subscription_id: id,
                     subscriber: sub.subscriber,
@@ -1486,8 +1489,7 @@ impl SubscriptionVault {
 
     /// Return the total number of subscriptions ever created.
     pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "next_id");
-        env.storage().instance().get(&key).unwrap_or(0u32)
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32)
     }
 
     /// Return the total number of subscriptions for a merchant.
@@ -1519,6 +1521,64 @@ impl SubscriptionVault {
     /// When no cap is configured all cap-related fields return `None` / `false`.
     pub fn get_cap_info(env: Env, subscription_id: u32) -> Result<CapInfo, Error> {
         queries::get_cap_info(&env, subscription_id)
+    }
+
+    /// Set or clear the contract-wide default lifetime cap applied to new subscriptions.
+    ///
+    /// When set, any `create_subscription` call that provides no explicit `lifetime_cap`
+    /// inherits this value (unless a per-merchant default takes precedence).
+    /// Pass `None` to remove the global default.
+    ///
+    /// # Auth
+    /// Admin only.
+    pub fn set_global_cap_default(
+        env: Env,
+        admin: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_set_global_cap_default(&env, admin, cap)
+    }
+
+    /// Return the current contract-wide default lifetime cap, or `None` if unset.
+    pub fn get_global_cap_default(env: Env) -> Option<i128> {
+        subscription::get_global_cap_default(&env)
+    }
+
+    /// Set or clear a per-merchant default lifetime cap for all new subscriptions to this merchant.
+    ///
+    /// Overrides the global default for subscriptions created against `merchant`.
+    /// Pass `None` to fall back to the global default.
+    ///
+    /// # Auth
+    /// Merchant address must authorize.
+    pub fn set_merchant_cap_default(
+        env: Env,
+        merchant: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_set_merchant_cap_default(&env, merchant, cap)
+    }
+
+    /// Return the per-merchant default lifetime cap, or `None` if unset.
+    pub fn get_merchant_cap_default(env: Env, merchant: Address) -> Option<i128> {
+        subscription::get_merchant_cap_default(&env, merchant)
+    }
+
+    /// Update the lifetime cap on an existing subscription.
+    ///
+    /// - Raising or removing the cap is always allowed.
+    /// - Lowering the cap below `lifetime_charged` is rejected with `LifetimeCapReached`.
+    /// - Setting to `None` removes the cap entirely.
+    ///
+    /// # Auth
+    /// Admin only.
+    pub fn update_subscription_cap(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+        new_cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_update_subscription_cap(&env, admin, subscription_id, new_cap)
     }
 
     /// Return subscription billing statements using offset/limit pagination.
@@ -1560,6 +1620,29 @@ impl SubscriptionVault {
             limit,
             newest_first,
         )
+    }
+
+    /// Return a single billing period snapshot by subscription and period index.
+    ///
+    /// `period_index` is `ledger_timestamp / interval_seconds` for the billing period.
+    /// Returns `None` when no charge has been processed for that period.
+    pub fn get_period_snapshot(
+        env: Env,
+        subscription_id: u32,
+        period_index: u64,
+    ) -> Option<BillingPeriodSnapshot> {
+        period_snapshots::get_period_snapshot(&env, subscription_id, period_index)
+    }
+
+    /// Return the most-recent billing period snapshots for a subscription, newest first.
+    ///
+    /// - `limit`: maximum number of snapshots to return.
+    pub fn list_period_snapshots(
+        env: Env,
+        subscription_id: u32,
+        limit: u32,
+    ) -> Vec<BillingPeriodSnapshot> {
+        period_snapshots::list_period_snapshots(&env, subscription_id, limit)
     }
 
 /// Add a new accepted token.

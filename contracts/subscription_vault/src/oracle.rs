@@ -1,12 +1,10 @@
 //! Optional oracle integration for cross-currency pricing.
 
 use crate::safe_math::{safe_add, safe_div, safe_mul, safe_pow, safe_sub};
-use crate::types::{Error, OracleConfig, OraclePrice, Subscription};
+use crate::types::{DataKey, Error, OracleConfig, OraclePrice, Subscription};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-const KEY_ORACLE_ENABLED: &str = "oracle_enabled";
-const KEY_ORACLE_ADDR: &str = "oracle_addr";
-const KEY_ORACLE_MAX_AGE: &str = "oracle_max_age";
+
 
 pub fn set_oracle_config(
     env: &Env,
@@ -29,14 +27,12 @@ pub fn set_oracle_config(
                 return Err(Error::InvalidInput);
             }
         }
-        let storage = env.storage().instance();
-        storage.set(&Symbol::new(env, KEY_ORACLE_ENABLED), &enabled);
-        if let Some(ref addr) = oracle {
-            storage.set(&Symbol::new(env, KEY_ORACLE_ADDR), addr);
-        } else {
-            storage.remove(&Symbol::new(env, KEY_ORACLE_ADDR));
-        }
-        storage.set(&Symbol::new(env, KEY_ORACLE_MAX_AGE), &max_age_seconds);
+        let config = OracleConfig {
+            enabled,
+            oracle,
+            max_age_seconds,
+        };
+        env.storage().instance().set(&DataKey::Oracle, &config);
         Ok(())
     }
 }
@@ -54,15 +50,11 @@ pub fn get_oracle_config(env: &Env) -> OracleConfig {
     #[cfg(feature = "oracle-pricing")]
     {
         let storage = env.storage().instance();
-        OracleConfig {
-            enabled: storage
-                .get(&Symbol::new(env, KEY_ORACLE_ENABLED))
-                .unwrap_or(false),
-            oracle: storage.get::<_, Address>(&Symbol::new(env, KEY_ORACLE_ADDR)),
-            max_age_seconds: storage
-                .get(&Symbol::new(env, KEY_ORACLE_MAX_AGE))
-                .unwrap_or(0u64),
-        }
+        storage.get(&DataKey::Oracle).unwrap_or(OracleConfig {
+            enabled: false,
+            oracle: None,
+            max_age_seconds: 0,
+        })
     }
 }
 
