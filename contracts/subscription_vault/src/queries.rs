@@ -186,8 +186,14 @@ pub fn get_subscriptions_by_token(
     Ok(out)
 }
 
-/// Computes the estimated next charge timestamp for a subscription.
-pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
+/// Returns full next charge information for a subscription.
+pub fn get_next_charge_info(env: &Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
+    let sub = get_subscription(env, subscription_id)?;
+    Ok(compute_next_charge_info(env, &sub))
+}
+
+/// Computes the estimated next charge timestamp and status for a subscription.
+pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextChargeInfo {
     let next_charge_timestamp = subscription
         .last_payment_timestamp
         .saturating_add(subscription.interval_seconds);
@@ -205,6 +211,10 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     NextChargeInfo {
         next_charge_timestamp,
         is_charge_expected,
+        status: subscription.status,
+        reason,
+        amount: subscription.amount,
+        token: subscription.token.clone(),
     }
 }
 

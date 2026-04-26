@@ -1471,8 +1471,7 @@ impl SubscriptionVault {
 /// # Errors
 /// NotFound → subscription doesn’t exist.
     pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
-        let sub = queries::get_subscription(&env, subscription_id)?;
-        Ok(compute_next_charge_info(&sub))
+        queries::get_next_charge_info(&env, subscription_id)
     }
 
     /// Return subscriptions for a merchant, paginated.

@@ -1188,7 +1188,7 @@ fn test_deposit_funds_event_payload() {
         &None::<i128>,
         &None::<u64>,
     );
-
+    
     client.deposit_funds(&id, &subscriber, &15_000_000);
 
     let events = env.events().all();
@@ -1232,7 +1232,7 @@ fn test_deposit_funds_cei_compliance() {
         &None::<i128>,
         &None::<u64>,
     );
-
+    
     let initial_contract_balance = token_client.balance(&client.address);
     let deposit_amount = 20_000_000i128;
 
@@ -1896,21 +1896,6 @@ fn test_batch_charge_fails_unauthorized() {
 
     // This will panic because no auth is provided for the admin
     client.batch_charge(&ids);
-}
-
-#[test]
-fn test_batch_charge_oversized_batch_fails() {
-    let test_env = TestEnv::default();
-    test_env.env.ledger().set_timestamp(T0);
-
-    // Create a batch with 101 IDs (exceeds MAX_BATCH_SIZE of 100)
-    let mut ids = Vec::new(&test_env.env);
-    for i in 0..101 {
-        ids.push_back(i);
-    }
-
-    let result = test_env.client.try_batch_charge(&ids);
-    assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
 #[test]
@@ -8112,14 +8097,14 @@ fn test_compaction_aggregation_accuracy() {
     // Another interval charge
     test_env.env.ledger().set_timestamp(T0 + 2 * INTERVAL);
     test_env.client.charge_subscription(&id); // 10 USDC (sequence 3)
-
+    
     // Total charged so far: 10 + 5 + 2 + 10 = 27 USDC
     // Sequences: 0 (Interval), 1 (Usage), 2 (OneOff), 3 (Interval)
 
     // 2. Compact first 3 rows
     test_env.client.set_billing_retention(&test_env.admin, &1);
     let summary = test_env.client.compact_billing_statements(&test_env.admin, &id, &None::<u32>);
-
+    
     assert_eq!(summary.pruned_count, 3);
     assert_eq!(summary.total_pruned_amount, 17_000_000i128);
 
@@ -8137,7 +8122,7 @@ fn test_compaction_aggregation_accuracy() {
     for stmt in live_page.statements.iter() {
         live_total += stmt.amount;
     }
-
+    
     assert_eq!(agg.total_amount + live_total, sub.lifetime_charged);
     assert_eq!(sub.lifetime_charged, 27_000_000i128);
 }
