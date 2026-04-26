@@ -32,8 +32,15 @@ fn test_valid_usage_charging() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &100_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
     client.charge_usage_with_reference(&sub_id, &5_000_000i128, &String::from_str(&env, "ref1"));
@@ -58,7 +65,8 @@ fn test_usage_disabled() {
         &1i128,
         &INTERVAL,
         &false, // usage_enabled = false
-        &None, &None
+        &None,
+        &None,
     );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
@@ -73,8 +81,15 @@ fn test_zero_or_negative_usage() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &100_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
     let result = client.try_charge_usage(&sub_id, &0i128);
@@ -91,8 +106,15 @@ fn test_exact_prepaid_balance_usage() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &10_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
 
     client.charge_usage(&sub_id, &10_000_000i128);
@@ -135,8 +157,15 @@ fn test_burst_usage_attempts() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &100_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
     client.configure_usage_limits(
@@ -177,8 +206,15 @@ fn test_rate_limit_violations() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &100_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
     client.configure_usage_limits(
@@ -214,8 +250,15 @@ fn test_replay_attacks() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &100_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
     client.charge_usage_with_reference(
@@ -242,8 +285,15 @@ fn test_usage_cap_enforcement() {
     let merchant = Address::generate(&env);
     soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &100_000_000i128);
 
-    let sub_id =
-        client.create_subscription(&subscriber, &merchant, &1i128, &INTERVAL, &true, &None, &None);
+    let sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
     client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
 
     client.configure_usage_limits(
