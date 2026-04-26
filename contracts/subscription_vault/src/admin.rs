@@ -1,4 +1,4 @@
-//! Admin and config: init, min_topup, batch_charge.
+//! Admin and config: init, min_topup, batch_charge, single charge.
 //!
 //! **PRs that only change admin or batch behavior should edit this file only.**
 
@@ -8,7 +8,7 @@ use crate::types::{
     AcceptedToken, AdminRotatedEvent, BatchChargeResult, DataKey, Error, RecoveryEvent,
     RecoveryReason,
 };
-use crate::{charge_core::charge_one, ChargeExecutionResult};
+use crate::{charge_core::{charge_one, charge_usage_one}, ChargeExecutionResult};
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
 fn accepted_tokens_key() -> DataKey {
@@ -215,6 +215,29 @@ pub fn do_batch_charge(
         results.push_back(res);
     }
     Ok(results)
+}
+
+/// Performs a single interval-based charge. Admin only.
+pub fn do_charge_subscription(
+    env: &Env,
+    subscription_id: u32,
+) -> Result<ChargeExecutionResult, Error> {
+    let _admin = require_stored_admin_auth(env)?;
+
+    let now = env.ledger().timestamp();
+    charge_one(env, subscription_id, now, None)
+}
+
+/// Performs a single usage-based charge. Admin only.
+pub fn do_charge_usage(
+    env: &Env,
+    subscription_id: u32,
+    usage_amount: i128,
+    reference: String,
+) -> Result<(), Error> {
+    let _admin = require_stored_admin_auth(env)?;
+
+    charge_usage_one(env, subscription_id, usage_amount, reference)
 }
 
 pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
