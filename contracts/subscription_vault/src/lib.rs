@@ -83,6 +83,7 @@ mod queries;
 mod reentrancy;
 pub mod safe_math;
 mod state_machine;
+mod period_snapshots;
 mod statements;
 mod subscription;
 mod types;
@@ -114,6 +115,8 @@ mod test_usage_limits;
 mod test_deterministic_charging;
 #[cfg(test)]
 mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_billing_period_snapshots;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -123,9 +126,9 @@ pub use queries::{compute_next_charge_info, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIS
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
-    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
     MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
@@ -136,6 +139,8 @@ pub use types::{
     SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -1557,6 +1562,29 @@ impl SubscriptionVault {
             limit,
             newest_first,
         )
+    }
+
+    /// Return a single billing period snapshot by subscription and period index.
+    ///
+    /// `period_index` is `ledger_timestamp / interval_seconds` for the billing period.
+    /// Returns `None` when no charge has been processed for that period.
+    pub fn get_period_snapshot(
+        env: Env,
+        subscription_id: u32,
+        period_index: u64,
+    ) -> Option<BillingPeriodSnapshot> {
+        period_snapshots::get_period_snapshot(&env, subscription_id, period_index)
+    }
+
+    /// Return the most-recent billing period snapshots for a subscription, newest first.
+    ///
+    /// - `limit`: maximum number of snapshots to return.
+    pub fn list_period_snapshots(
+        env: Env,
+        subscription_id: u32,
+        limit: u32,
+    ) -> Vec<BillingPeriodSnapshot> {
+        period_snapshots::list_period_snapshots(&env, subscription_id, limit)
     }
 
 /// Add a new accepted token.
