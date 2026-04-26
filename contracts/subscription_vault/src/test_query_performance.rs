@@ -60,18 +60,17 @@ fn inject_subscriptions(
     token: &Address,
 ) {
     env.as_contract(contract_id, || {
-        let next_id_key = Symbol::new(env, "next_id");
-        let start_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+        let start_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
         for i in 0..count {
             let id = start_id + i;
             let sub = create_mock_sub(env, subscriber, token);
-            env.storage().instance().set(&id, &sub);
+            env.storage().instance().set(&DataKey::Sub(id), &sub);
         }
 
         env.storage()
             .instance()
-            .set(&next_id_key, &(start_id + count));
+            .set(&DataKey::NextId, &(start_id + count));
     });
 }
 
@@ -181,14 +180,14 @@ fn test_subscriber_list_empty() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_subscriber_list_invalid_limit_zero() {
     let (env, client, _token, _) = setup();
     client.list_subscriptions_by_subscriber(&Address::generate(&env), &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_subscriber_list_invalid_limit_overflow() {
     let (env, client, _token, _) = setup();
     client.list_subscriptions_by_subscriber(&Address::generate(&env), &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -231,14 +230,14 @@ fn test_merchant_query_pagination() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_merchant_query_limit_zero() {
     let (env, client, _token, _) = setup();
     client.get_subscriptions_by_merchant(&Address::generate(&env), &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_merchant_query_limit_overflow() {
     let (env, client, _token, _) = setup();
     client.get_subscriptions_by_merchant(&Address::generate(&env), &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -289,14 +288,14 @@ fn test_token_query_pagination() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_token_query_limit_zero() {
     let (env, client, token, _) = setup();
     client.get_subscriptions_by_token(&token, &0, &0);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_token_query_limit_overflow() {
     let (env, client, token, _) = setup();
     client.get_subscriptions_by_token(&token, &0, &(MAX_SUBSCRIPTION_LIST_PAGE + 1));
@@ -318,14 +317,14 @@ fn test_merchant_count_and_token_count() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1015)")] // InvalidInput = 1015
+#[should_panic(expected = "Error(Contract, #3001)")] // InvalidInput = 3001
 fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
     let (env, client, token, _) = setup();
     
     // We simulate a contract that has exceeded the MAX_WRITE_PATH_SCAN_DEPTH
     // by injecting a fake next_id. 
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&Symbol::new(&env, "next_id"), &(MAX_WRITE_PATH_SCAN_DEPTH + 1));
+        env.storage().instance().set(&DataKey::NextId, &(MAX_WRITE_PATH_SCAN_DEPTH + 1));
     });
 
     let subscriber = Address::generate(&env);
@@ -334,7 +333,7 @@ fn test_write_path_scan_depth_guard_triggers_for_large_contracts() {
     // In order to trigger the O(n) scan, we need a credit limit > 0
     // so `compute_subscriber_exposure` gets called instead of fast-path exiting.
     env.as_contract(&client.address, || {
-        let credit_limit_key = (Symbol::new(&env, "credit_limit"), subscriber.clone(), token.clone());
+        let credit_limit_key = DataKey::CreditLimit(subscriber.clone(), token.clone());
         env.storage().instance().set(&credit_limit_key, &1000i128); // Non-zero sets up the scan
     });
 

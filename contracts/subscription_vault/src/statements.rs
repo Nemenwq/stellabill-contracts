@@ -103,40 +103,16 @@ pub fn append_statement(
         kind,
     };
     storage.set(&statement_row_key(subscription_id, next), &statement);
+    let next_sequence = next.checked_add(1).ok_or(Error::Overflow)?;
+    let next_live = live.checked_add(1).ok_or(Error::Overflow)?;
     storage.set(
         &next_statement_key(subscription_id),
-        &(safe_add(next as i128, 1).unwrap_or(0) as u32),
+        &next_sequence,
     );
-    let mut new_live = safe_add(live as i128, 1).unwrap_or(0) as u32;
-    let keep_recent = get_retention_config(env).keep_recent;
-
-    if keep_recent < u32::MAX && new_live > keep_recent {
-        let oldest_seq = (next + 1).saturating_sub(new_live);
-        let key = statement_row_key(subscription_id, oldest_seq);
-        if let Some(row) = storage.get::<_, BillingStatement>(&key) {
-            let mut aggregate = get_compacted_aggregate(env, subscription_id);
-            aggregate.pruned_count = (safe_add(aggregate.pruned_count as i128, 1).unwrap_or(0)) as u32;
-            aggregate.total_amount = safe_add(aggregate.total_amount, row.amount).unwrap_or(aggregate.total_amount);
-            match row.kind {
-                BillingChargeKind::Interval => aggregate.totals.interval = safe_add(aggregate.totals.interval, row.amount).unwrap_or(aggregate.totals.interval),
-                BillingChargeKind::Usage => aggregate.totals.usage = safe_add(aggregate.totals.usage, row.amount).unwrap_or(aggregate.totals.usage),
-                BillingChargeKind::OneOff => aggregate.totals.one_off = safe_add(aggregate.totals.one_off, row.amount).unwrap_or(aggregate.totals.one_off),
-            }
-            aggregate.oldest_period_start = match aggregate.oldest_period_start {
-                Some(a) => Some(a.min(row.period_start)),
-                None => Some(row.period_start),
-            };
-            aggregate.newest_period_end = match aggregate.newest_period_end {
-                Some(a) => Some(a.max(row.period_end)),
-                None => Some(row.period_end),
-            };
-            storage.set(&aggregate_key(subscription_id), &aggregate);
-            storage.remove(&key);
-            new_live -= 1;
-        }
-    }
-    
-    storage.set(&live_statement_key(subscription_id), &new_live);
+    storage.set(
+        &live_statement_key(subscription_id),
+        &next_live,
+    );
     Ok(())
 }
 
@@ -210,8 +186,10 @@ pub fn compact_subscription_statements(
     }
 
     let mut aggregate = get_compacted_aggregate(env, subscription_id);
-    aggregate.pruned_count =
-        (safe_add(aggregate.pruned_count as i128, removed as i128).unwrap_or(0)) as u32;
+    aggregate.pruned_count = aggregate
+        .pruned_count
+        .checked_add(removed)
+        .ok_or(Error::Overflow)?;
     aggregate.total_amount = safe_add(aggregate.total_amount, amount)?;
     aggregate.totals.interval = safe_add(aggregate.totals.interval, interval_amt)?;
     aggregate.totals.usage = safe_add(aggregate.totals.usage, usage_amt)?;

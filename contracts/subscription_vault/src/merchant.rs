@@ -23,7 +23,7 @@
 use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantPausedEvent,
-    MerchantUnpausedEvent, TokenEarnings, TokenReconciliationSnapshot,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
 };
 use soroban_sdk::{token, Address, Env, Symbol, Vec};
 
@@ -99,16 +99,8 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
-fn merchant_balance_key(
-    env: &Env,
-    merchant: &Address,
-    token: &Address,
-) -> (Symbol, Address, Address) {
-    (
-        Symbol::new(env, "merchant_balance"),
-        merchant.clone(),
-        token.clone(),
-    )
+fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
+    DataKey::MerchantBalance(merchant.clone(), token.clone())
 }
 
 pub fn get_merchant_token_earnings(
@@ -201,12 +193,12 @@ pub fn get_merchant_balance(env: &Env, merchant: &Address) -> i128 {
 }
 
 pub fn get_merchant_balance_by_token(env: &Env, merchant: &Address, token: &Address) -> i128 {
-    let key = merchant_balance_key(env, merchant, token);
+    let key = merchant_balance_key(merchant, token);
     env.storage().instance().get(&key).unwrap_or(0i128)
 }
 
 fn set_merchant_balance(env: &Env, merchant: &Address, token: &Address, balance: &i128) {
-    let key = merchant_balance_key(env, merchant, token);
+    let key = merchant_balance_key(merchant, token);
     env.storage().instance().set(&key, balance);
 }
 
@@ -308,8 +300,8 @@ pub fn withdraw_merchant_funds_for_token(
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     env.events().publish(
-        (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
-        crate::types::MerchantWithdrawalEvent {
+        (Symbol::new(env, "withdrawn"), merchant.clone()),
+        MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
             amount,
