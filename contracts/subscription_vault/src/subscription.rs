@@ -42,9 +42,10 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub, validate_non_negati
 use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, DataKey, Error, FundsDepositedEvent, PartialRefundEvent,
-    LifetimeCapReachedEvent, PlanMaxActiveUpdatedEvent, PlanTemplate, PlanTemplateUpdatedEvent,
-    SubscriberWithdrawalEvent,
+    BillingChargeKind, DataKey, Error, FundsDepositedEvent,
+    GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent,
     SubscriptionStatus, UsageLimits,
@@ -324,7 +325,10 @@ pub fn do_create_subscription_with_token(
         return Err(Error::InvalidInput);
     }
 
-    if let Some(cap) = lifetime_cap {
+    // Resolve effective cap: explicit > merchant default > global default.
+    let resolved_cap = resolve_cap(env, &merchant, lifetime_cap);
+
+    if let Some(cap) = resolved_cap {
         if cap <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -346,7 +350,7 @@ pub fn do_create_subscription_with_token(
         status: SubscriptionStatus::Active,
         prepaid_balance: 0i128,
         usage_enabled,
-        lifetime_cap,
+        lifetime_cap: resolved_cap,
         lifetime_charged: 0i128,
         start_time: env.ledger().timestamp(),
         expires_at,
@@ -444,6 +448,9 @@ pub fn do_deposit_funds(
 
     // Enforce credit limit for additional prepaid balance being loaded.
     enforce_credit_limit_for_delta(env, &subscriber, &token_addr, amount)?;
+
+    // Enforce lifetime cap: deposit cannot exceed remaining chargeable capacity.
+    enforce_deposit_cap(&sub, amount)?;
 
     // EFFECTS
     sub.prepaid_balance = safe_add_balance(sub.prepaid_balance, amount)?;
@@ -937,6 +944,151 @@ pub fn do_partial_refund(
     Ok(())
 }
 
+// ── Lifetime cap helpers ──────────────────────────────────────────────────────
+
+pub fn get_global_cap_default(env: &Env) -> Option<i128> {
+    env.storage()
+        .instance()
+        .get::<_, i128>(&Symbol::new(env, "cap_default"))
+}
+
+pub fn get_merchant_cap_default_internal(env: &Env, merchant: &Address) -> Option<i128> {
+    env.storage()
+        .instance()
+        .get::<_, i128>(&(Symbol::new(env, "merch_cap"), merchant.clone()))
+}
+
+/// Resolve effective cap: explicit > merchant default > global default.
+fn resolve_cap(env: &Env, merchant: &Address, explicit_cap: Option<i128>) -> Option<i128> {
+    if explicit_cap.is_some() {
+        return explicit_cap;
+    }
+    let merchant_default = get_merchant_cap_default_internal(env, merchant);
+    if merchant_default.is_some() {
+        return merchant_default;
+    }
+    get_global_cap_default(env)
+}
+
+/// Reject a deposit that would lock funds beyond the remaining chargeable cap.
+fn enforce_deposit_cap(sub: &Subscription, deposit: i128) -> Result<(), Error> {
+    if let Some(cap) = sub.lifetime_cap {
+        let chargeable_remaining = cap.saturating_sub(sub.lifetime_charged);
+        let depositable_remaining = chargeable_remaining.saturating_sub(sub.prepaid_balance);
+        if deposit > depositable_remaining {
+            return Err(Error::LifetimeCapReached);
+        }
+    }
+    Ok(())
+}
+
+pub fn do_set_global_cap_default(
+    env: &Env,
+    admin: Address,
+    cap: Option<i128>,
+) -> Result<(), Error> {
+    super::require_admin_auth(env, &admin)?;
+
+    if let Some(c) = cap {
+        if c <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let old_default = get_global_cap_default(env);
+    let key = Symbol::new(env, "cap_default");
+    match cap {
+        Some(c) => env.storage().instance().set(&key, &c),
+        None => env.storage().instance().remove(&key),
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "global_cap_set"),),
+        GlobalCapDefaultUpdatedEvent {
+            admin,
+            old_default,
+            new_default: cap,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn do_set_merchant_cap_default(
+    env: &Env,
+    merchant: Address,
+    cap: Option<i128>,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    if let Some(c) = cap {
+        if c <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let old_default = get_merchant_cap_default_internal(env, &merchant);
+    let key = (Symbol::new(env, "merch_cap"), merchant.clone());
+    match cap {
+        Some(c) => env.storage().instance().set(&key, &c),
+        None => env.storage().instance().remove(&key),
+    }
+
+    env.events().publish(
+        (Symbol::new(env, "merchant_cap_set"), merchant.clone()),
+        MerchantCapDefaultUpdatedEvent {
+            merchant,
+            old_default,
+            new_default: cap,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn do_update_subscription_cap(
+    env: &Env,
+    admin: Address,
+    subscription_id: u32,
+    new_cap: Option<i128>,
+) -> Result<(), Error> {
+    super::require_admin_auth(env, &admin)?;
+
+    if let Some(c) = new_cap {
+        if c <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+    }
+
+    let mut sub = get_subscription(env, subscription_id)?;
+    let old_cap = sub.lifetime_cap;
+
+    // Cannot set cap below what has already been charged.
+    if let Some(new_c) = new_cap {
+        if new_c < sub.lifetime_charged {
+            return Err(Error::LifetimeCapReached);
+        }
+    }
+
+    sub.lifetime_cap = new_cap;
+    env.storage().instance().set(&subscription_id, &sub);
+
+    env.events().publish(
+        (Symbol::new(env, "cap_updated"), subscription_id),
+        LifetimeCapUpdatedEvent {
+            subscription_id,
+            old_cap,
+            new_cap,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+    Ok(())
+}
+
+pub fn get_merchant_cap_default(env: &Env, merchant: Address) -> Option<i128> {
+    get_merchant_cap_default_internal(env, &merchant)
+}
+
 pub fn do_create_plan_template(
     env: &Env,
     merchant: Address,
@@ -1029,6 +1181,7 @@ pub fn do_create_subscription_from_plan(
     let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
     env.storage().instance().set(&DataKey::NextId, &next_id);
 
+    let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);
     let sub = Subscription {
         subscriber: subscriber.clone(),
         merchant: plan.merchant.clone(),
@@ -1039,7 +1192,7 @@ pub fn do_create_subscription_from_plan(
         status: SubscriptionStatus::Active,
         prepaid_balance: 0i128,
         usage_enabled: plan.usage_enabled,
-        lifetime_cap: plan.lifetime_cap,
+        lifetime_cap: resolved_cap,
         lifetime_charged: 0i128,
         start_time: env.ledger().timestamp(),
         expires_at: None,
