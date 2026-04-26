@@ -36,6 +36,13 @@
 //! deserialization cost grows with the list length, even when only `limit` entries
 //! are needed. Use [`get_merchant_subscription_count`] / [`get_token_subscription_count`]
 //! to estimate index size before paginating.
+//!
+//! ## Key registry: DataKey variants used here
+//! - `DataKey::Sub(u32)`
+//! - `DataKey::MerchantSubs(Address)`
+//! - `DataKey::TokenSubs(Address)`
+//! - `DataKey::PlanMaxActive(u32)`
+//! - `DataKey::NextId`
 
 use crate::safe_math::{safe_mul, safe_sub};
 use crate::types::{CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus};
@@ -66,7 +73,7 @@ pub const MAX_SCAN_DEPTH: u32 = 1_000;
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
     env.storage()
         .instance()
-        .get(&subscription_id)
+        .get(&DataKey::Sub(subscription_id))
         .ok_or(Error::NotFound)
 }
 
@@ -84,7 +91,11 @@ pub fn estimate_topup_for_intervals(
     let intervals_i128: i128 = num_intervals.into();
     let required = safe_mul(sub.amount, intervals_i128)?;
 
-    let topup = safe_sub(required, sub.prepaid_balance).unwrap_or(0).max(0);
+    let topup = if required <= sub.prepaid_balance {
+        0
+    } else {
+        safe_sub(required, sub.prepaid_balance)?
+    };
     Ok(topup)
 }
 
@@ -118,7 +129,7 @@ pub fn get_subscriptions_by_merchant(
     let mut i = start;
     while i < end {
         let sub_id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&sub_id) {
+        if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(sub_id)) {
             result.push_back(sub);
         }
         i += 1;
@@ -135,7 +146,7 @@ pub fn get_merchant_subscription_count(env: &Env, merchant: Address) -> u32 {
 
 /// Number of subscription ids indexed for this token (length of the `token_subs` list).
 pub fn get_token_subscription_count(env: &Env, token: Address) -> u32 {
-    let key = (Symbol::new(env, "token_subs"), token);
+    let key = DataKey::TokenSubs(token);
     let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
     ids.len()
 }
@@ -152,7 +163,7 @@ pub fn get_subscriptions_by_token(
     if limit == 0 || limit > MAX_SUBSCRIPTION_LIST_PAGE {
         return Err(Error::InvalidInput);
     }
-    let key = (Symbol::new(env, "token_subs"), token);
+    let key = DataKey::TokenSubs(token);
     let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
     let len = ids.len();
     if start >= len {
@@ -167,7 +178,7 @@ pub fn get_subscriptions_by_token(
     let mut i = start;
     while i < end {
         let id = ids.get(i).unwrap();
-        if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+        if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
             out.push_back(sub);
         }
         i += 1;
@@ -175,8 +186,14 @@ pub fn get_subscriptions_by_token(
     Ok(out)
 }
 
-/// Computes the estimated next charge timestamp for a subscription.
-pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
+/// Returns full next charge information for a subscription.
+pub fn get_next_charge_info(env: &Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
+    let sub = get_subscription(env, subscription_id)?;
+    Ok(compute_next_charge_info(env, &sub))
+}
+
+/// Computes the estimated next charge timestamp and status for a subscription.
+pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextChargeInfo {
     let next_charge_timestamp = subscription
         .last_payment_timestamp
         .saturating_add(subscription.interval_seconds);
@@ -184,7 +201,7 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     let is_charge_expected = match subscription.status {
         SubscriptionStatus::Active => true,
         SubscriptionStatus::GracePeriod => true,
-        SubscriptionStatus::InsufficientBalance => true,
+        SubscriptionStatus::InsufficientBalance => false,
         SubscriptionStatus::Paused => false,
         SubscriptionStatus::Cancelled => false,
         SubscriptionStatus::Expired => false,
@@ -194,6 +211,10 @@ pub fn compute_next_charge_info(subscription: &Subscription) -> NextChargeInfo {
     NextChargeInfo {
         next_charge_timestamp,
         is_charge_expected,
+        status: subscription.status,
+        reason,
+        amount: subscription.amount,
+        token: subscription.token.clone(),
     }
 }
 
@@ -222,7 +243,7 @@ pub fn get_cap_info(env: &Env, subscription_id: u32) -> Result<CapInfo, Error> {
 /// A return value of `0` means no limit is enforced for that plan.
 /// The plan must exist; returns `0` if no limit has been explicitly set.
 pub fn get_plan_max_active_subs(env: &Env, plan_template_id: u32) -> u32 {
-    let key = (Symbol::new(env, "plan_max_active"), plan_template_id);
+    let key = DataKey::PlanMaxActive(plan_template_id);
     env.storage().instance().get(&key).unwrap_or(0)
 }
 
@@ -266,8 +287,7 @@ pub fn list_subscriptions_by_subscriber(
         return Err(Error::InvalidInput);
     }
 
-    let next_id_key = Symbol::new(env, "next_id");
-    let next_id: u32 = env.storage().instance().get(&next_id_key).unwrap_or(0);
+    let next_id: u32 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
     // Cap the scan window to MAX_SCAN_DEPTH IDs per call.
     // If the budget is exhausted before `limit` matches are found, `next_start_id`
@@ -279,7 +299,7 @@ pub fn list_subscriptions_by_subscriber(
 
     let mut id = start_from_id;
     while id < scan_end {
-        if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+        if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
             if sub.subscriber == subscriber {
                 if subscription_ids.len() < limit {
                     subscription_ids.push_back(id);
