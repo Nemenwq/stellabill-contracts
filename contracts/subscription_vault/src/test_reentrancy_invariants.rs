@@ -13,8 +13,7 @@
 //! - Cross-function reentrancy simulation (not possible in Soroban test env).
 //! - Live token callback injection (Soroban mock auths prevent this).
 
-use crate::{
-    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient, types::DataKey,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -67,7 +66,7 @@ fn seed_balance(env: &Env, client: &SubscriptionVaultClient, id: u32, balance: i
     let mut sub = client.get_subscription(&id);
     sub.prepaid_balance = balance;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&id, &sub);
+        env.storage().instance().set(&DataKey::Sub(id), &sub);
     });
 }
 
@@ -81,7 +80,7 @@ fn seed_merchant_balance(
     use soroban_sdk::Symbol;
     env.as_contract(&client.address, || {
         env.storage().instance().set(
-            &(Symbol::new(env, "merchant_balance"), merchant.clone(), token.clone()),
+            &DataKey::MerchantBalance(merchant.clone(), token.clone()),
             &balance,
         );
     });

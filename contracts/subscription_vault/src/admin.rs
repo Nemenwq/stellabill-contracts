@@ -11,12 +11,12 @@ use crate::types::{
 use crate::{charge_core::charge_one, ChargeExecutionResult};
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
-fn accepted_tokens_key(env: &Env) -> Symbol {
-    Symbol::new(env, "accepted_tokens")
+fn accepted_tokens_key() -> DataKey {
+    DataKey::AcceptedTokens
 }
 
-fn accepted_token_decimals_key(env: &Env, token: &Address) -> (Symbol, Address) {
-    (Symbol::new(env, "token_decimals"), token.clone())
+fn accepted_token_decimals_key(token: &Address) -> DataKey {
+    DataKey::TokenDecimals(token.clone())
 }
 
 pub fn do_init(
@@ -28,22 +28,22 @@ pub fn do_init(
     grace_period: u64,
 ) -> Result<(), Error> {
     let instance = env.storage().instance();
-    if instance.has(&Symbol::new(env, "token")) || instance.has(&Symbol::new(env, "admin")) {
+    if instance.has(&DataKey::Token) || instance.has(&DataKey::Admin) {
         return Err(Error::AlreadyInitialized);
     }
     if min_topup < 0 {
         return Err(Error::InvalidAmount);
     }
 
-    instance.set(&Symbol::new(env, "token"), &token);
-    instance.set(&accepted_token_decimals_key(env, &token), &token_decimals);
+    instance.set(&DataKey::Token, &token);
+    instance.set(&accepted_token_decimals_key(&token), &token_decimals);
     let mut tokens = Vec::new(env);
     tokens.push_back(token.clone());
-    instance.set(&accepted_tokens_key(env), &tokens);
-    instance.set(&Symbol::new(env, "admin"), &admin);
-    instance.set(&Symbol::new(env, "min_topup"), &min_topup);
-    instance.set(&Symbol::new(env, "grace_period"), &grace_period);
-    instance.set(&DataKey::SchemaVersion, &1u32);
+    instance.set(&accepted_tokens_key(), &tokens);
+    instance.set(&DataKey::Admin, &admin);
+    instance.set(&DataKey::MinTopup, &min_topup);
+    instance.set(&DataKey::GracePeriod, &grace_period);
+    instance.set(&DataKey::SchemaVersion, &2u32);
     env.events().publish(
         (Symbol::new(env, "initialized"),),
         (token, admin, min_topup, grace_period),
@@ -54,7 +54,7 @@ pub fn do_init(
 pub fn require_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "admin"))
+        .get(&DataKey::Admin)
         .ok_or(Error::NotInitialized)
 }
 
@@ -77,7 +77,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
     require_admin_auth(env, &admin)?;
     env.storage()
         .instance()
-        .set(&Symbol::new(env, "min_topup"), &min_topup);
+        .set(&DataKey::MinTopup, &min_topup);
     env.events()
         .publish((Symbol::new(env, "min_topup_updated"),), min_topup);
     Ok(())
@@ -86,7 +86,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
 pub fn get_min_topup(env: &Env) -> Result<i128, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "min_topup"))
+        .get(&DataKey::MinTopup)
         .ok_or(Error::NotInitialized)
 }
 
@@ -94,7 +94,7 @@ pub fn do_set_grace_period(env: &Env, admin: Address, grace_period: u64) -> Resu
     require_admin_auth(env, &admin)?;
     env.storage()
         .instance()
-        .set(&Symbol::new(env, "grace_period"), &grace_period);
+        .set(&DataKey::GracePeriod, &grace_period);
     Ok(())
 }
 
@@ -102,28 +102,28 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
     Ok(env
         .storage()
         .instance()
-        .get(&Symbol::new(env, "grace_period"))
+        .get(&DataKey::GracePeriod)
         .unwrap_or(0))
 }
 
 pub fn get_token(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "token"))
+        .get(&DataKey::Token)
         .ok_or(Error::NotFound)
 }
 
 pub fn get_token_decimals(env: &Env, token: &Address) -> Result<u32, Error> {
     env.storage()
         .instance()
-        .get(&accepted_token_decimals_key(env, token))
+        .get(&accepted_token_decimals_key(token))
         .ok_or(Error::NotFound)
 }
 
 pub fn is_token_accepted(env: &Env, token: &Address) -> bool {
     env.storage()
         .instance()
-        .has(&accepted_token_decimals_key(env, token))
+        .has(&accepted_token_decimals_key(token))
 }
 
 pub fn add_accepted_token(
@@ -135,14 +135,14 @@ pub fn add_accepted_token(
     require_admin_auth(env, &admin)?;
 
     let storage = env.storage().instance();
-    if !storage.has(&accepted_token_decimals_key(env, &token)) {
+    if !storage.has(&accepted_token_decimals_key(&token)) {
         let mut tokens: Vec<Address> = storage
-            .get(&accepted_tokens_key(env))
+            .get(&accepted_tokens_key())
             .unwrap_or(Vec::new(env));
         tokens.push_back(token.clone());
-        storage.set(&accepted_tokens_key(env), &tokens);
+        storage.set(&accepted_tokens_key(), &tokens);
     }
-    storage.set(&accepted_token_decimals_key(env, &token), &decimals);
+    storage.set(&accepted_token_decimals_key(&token), &decimals);
     Ok(())
 }
 
@@ -155,10 +155,10 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     }
 
     let storage = env.storage().instance();
-    storage.remove(&accepted_token_decimals_key(env, &token));
+    storage.remove(&accepted_token_decimals_key(&token));
 
     let tokens: Vec<Address> = storage
-        .get(&accepted_tokens_key(env))
+        .get(&accepted_tokens_key())
         .unwrap_or(Vec::new(env));
     let mut next = Vec::new(env);
     for t in tokens.iter() {
@@ -166,18 +166,18 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
             next.push_back(t);
         }
     }
-    storage.set(&accepted_tokens_key(env), &next);
+    storage.set(&accepted_tokens_key(), &next);
     Ok(())
 }
 
 pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     let storage = env.storage().instance();
     let tokens: Vec<Address> = storage
-        .get(&accepted_tokens_key(env))
+        .get(&accepted_tokens_key())
         .unwrap_or(Vec::new(env));
     let mut out = Vec::new(env);
     for token in tokens.iter() {
-        if let Some(decimals) = storage.get::<_, u32>(&accepted_token_decimals_key(env, &token)) {
+        if let Some(decimals) = storage.get::<_, u32>(&accepted_token_decimals_key(&token)) {
             out.push_back(AcceptedToken { token, decimals });
         }
     }
@@ -203,6 +203,10 @@ pub fn do_batch_charge(
                 success: false,
                 error_code: Error::InsufficientBalance.to_code(),
             },
+            Ok(ChargeExecutionResult::LifetimeCapReached) => BatchChargeResult {
+                success: false,
+                error_code: Error::LifetimeCapReached.to_code(),
+            },
             Err(e) => BatchChargeResult {
                 success: false,
                 error_code: e.to_code(),
@@ -216,7 +220,7 @@ pub fn do_batch_charge(
 pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "admin"))
+        .get(&DataKey::Admin)
         .ok_or(Error::NotInitialized)
 }
 
@@ -239,7 +243,7 @@ pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) ->
     // that reads state on the event sees the already-updated value.
     env.storage()
         .instance()
-        .set(&Symbol::new(env, "admin"), &new_admin);
+        .set(&DataKey::Admin, &new_admin);
 
     env.events().publish(
         (Symbol::new(env, "admin_rotated"),),
@@ -321,14 +325,14 @@ pub fn set_protocol_fee(
     admin.require_auth();
     let stored = require_admin(env)?;
     if admin != stored {
-        return Err(crate::types::Error::Forbidden);
+        return Err(crate::types::Error::Unauthorized);
     }
     if fee_bps > 10_000 {
         return Err(crate::types::Error::InvalidInput);
     }
     let storage = env.storage().instance();
-    storage.set(&Symbol::new(env, "fee_bps"), &fee_bps);
-    storage.set(&Symbol::new(env, "treasury"), &treasury);
+    storage.set(&DataKey::FeeBps, &fee_bps);
+    storage.set(&DataKey::Treasury, &treasury);
     env.events().publish(
         (Symbol::new(env, "protocol_fee_configured"),),
         crate::types::ProtocolFeeConfiguredEvent {
@@ -345,7 +349,7 @@ pub fn set_protocol_fee(
 pub fn get_protocol_fee_bps(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "fee_bps"))
+        .get(&DataKey::FeeBps)
         .unwrap_or(0u32)
 }
 
@@ -353,5 +357,5 @@ pub fn get_protocol_fee_bps(env: &Env) -> u32 {
 pub fn get_treasury(env: &Env) -> Option<Address> {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "treasury"))
+        .get(&DataKey::Treasury)
 }

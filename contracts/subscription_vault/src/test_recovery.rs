@@ -32,7 +32,7 @@ fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 fn test_recovery_success_all_reasons() {
     let (env, client, token, admin) = setup_env();
     let recipient = Address::generate(&env);
-    let token_admin = admin.clone();
+    let _token_admin = admin.clone();
     let token_client = token::StellarAssetClient::new(&env, &token);
 
     // Mint 100 USDC to contract directly (stranded funds)
@@ -69,7 +69,7 @@ fn test_recovery_success_all_reasons() {
 
 #[test]
 fn test_recovery_unauthorized() {
-    let (env, client, token, admin) = setup_env();
+    let (env, client, token, _admin) = setup_env();
     let recipient = Address::generate(&env);
     let fake_admin = Address::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
@@ -79,7 +79,7 @@ fn test_recovery_unauthorized() {
     let recovery_id = String::from_str(&env, "rec_unauth");
     
     let result = client.try_recover_stranded_funds(&fake_admin, &token, &recipient, &10_000_000, &recovery_id, &RecoveryReason::UserOverpayment);
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
