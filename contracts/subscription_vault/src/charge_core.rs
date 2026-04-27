@@ -38,8 +38,8 @@ use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
     LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
-    SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
-    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
+    UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
 };
 use soroban_sdk::{symbol_short, Env, String, Symbol};
 

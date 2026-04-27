@@ -149,6 +149,7 @@ pub use types::{
     SNAPSHOT_FLAG_USAGE_CHARGED,
     DEFAULT_ALLOWED_OPS, OP_CHARGE, OP_WITHDRAW, OP_REFUND,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    UsageChargeResult,
 };
 
 /// Maximum subscription ID this contract will ever allocate.

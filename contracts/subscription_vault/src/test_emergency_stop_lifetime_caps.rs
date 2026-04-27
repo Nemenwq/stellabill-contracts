@@ -301,14 +301,12 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         env.storage().instance().set(&crate::types::DataKey::Sub(sub_id), &sub);
     });
 
-    assert_eq!(
-        client.try_charge_usage_with_reference(
-            &sub_id,
-            &2i128,
-            &String::from_str(&env, "cap-overrun-usage"),
-        ),
-        Ok(Ok(()))
+    let usage_result = client.try_charge_usage_with_reference(
+        &sub_id,
+        &2i128,
+        &String::from_str(&env, "cap-overrun-usage"),
     );
+    assert!(matches!(usage_result, Ok(Ok(_))));
 
     let updated = client.get_subscription(&sub_id);
     assert_eq!(updated.status, SubscriptionStatus::Cancelled);

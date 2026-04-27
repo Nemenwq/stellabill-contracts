@@ -384,6 +384,7 @@ pub fn withdraw_merchant_funds_for_token(
             token: token_addr.clone(),
             amount,
             remaining_balance: new_balance,
+            timestamp: env.ledger().timestamp(),
         },
     );
 

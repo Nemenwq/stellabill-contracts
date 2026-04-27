@@ -129,6 +129,45 @@ pub enum DataKey {
     BillingPeriodSnapshotIndex(u32),
 }
 
+/// Accrued totals by charge kind.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccruedTotals {
+    pub interval: i128,
+    pub usage: i128,
+    pub one_off: i128,
+}
+
+/// Merchant token-scoped earnings.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenEarnings {
+    pub accruals: AccruedTotals,
+    pub withdrawals: i128,
+    pub refunds: i128,
+}
+
+/// Snapshot for merchant earnings reporting.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationSnapshot {
+    pub total_accruals: i128,
+    pub total_withdrawals: i128,
+    pub total_refunds: i128,
+    pub computed_balance: i128,
+}
+
+/// A snapshot tied to a specific token.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationSnapshot {
+    pub token: Address,
+    pub total_accruals: i128,
+    pub total_withdrawals: i128,
+    pub total_refunds: i128,
+    pub computed_balance: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UsageChargeResult {
@@ -355,6 +394,16 @@ pub enum Error {
     InvalidOperations = 7002,
     /// Merchant config must allow the charge operation.
     MustAllowChargeOperation = 7003,
+
+    // --- Token (8000-8099) ---
+    /// Token decimals value is invalid (e.g. zero).
+    InvalidTokenDecimals = 8001,
+    /// Token address is not accepted by this contract.
+    InvalidToken = 8002,
+
+    // --- Subscription Update (9000-9099) ---
+    /// Attempting to change usage_enabled on an existing subscription is not allowed.
+    CannotChangeUsageMode = 9001,
 }
 
 impl Error {
@@ -619,7 +668,6 @@ pub struct BillingCompactedEvent {
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BillingStatementFinalization {
-<<<<<<< Implement-billing-statements-generation-and-retention-policy-with-stable-query-interface
     /// A recurring billing period closed normally after a successful charge.
     PeriodClosed = 0,
     /// The subscription was cancelled; this covers the current partial period.
@@ -631,23 +679,24 @@ pub enum BillingStatementFinalization {
 /// Lightweight index entry stored per-subscription and per-merchant.
 ///
 /// Avoids scanning all contract state for pagination queries.
-=======
-    PeriodClosed = 0,
-    Cancellation = 1,
-    FinalSettlement = 2,
-}
-
-/// Lightweight index entry for subscription/merchant pagination.
->>>>>>> main
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BillingStatementRef {
     pub subscription_id: u32,
     pub period_index: u32,
-<<<<<<< Implement-billing-statements-generation-and-retention-policy-with-stable-query-interface
     /// `period_end_timestamp` is stored here so time-range filters can run on
     /// the index alone without loading each full statement.
     pub period_end_timestamp: u64,
+}
+
+/// Event emitted when a period billing statement is written or overwritten.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BillingStatementPersistedEvent {
+    pub subscription_id: u32,
+    pub period_index: u32,
+    pub merchant: Address,
+    pub finalized_by: BillingStatementFinalization,
 }
 
 /// Grouped financial amounts for a single billing period.
@@ -673,54 +722,19 @@ pub struct PeriodStatementAmounts {
 ///
 /// Indexed by `(subscription_id, period_index)`. Immutable once written; a
 /// subsequent upsert with the same key replaces the record and updates indices.
-=======
-    pub period_end_timestamp: u64,
-}
-
-/// Event emitted when a period billing statement is written or overwritten.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct BillingStatementPersistedEvent {
-    pub subscription_id: u32,
-    pub period_index: u32,
-    pub merchant: Address,
-    pub finalized_by: BillingStatementFinalization,
-}
-
-/// Grouped financial amounts for a single billing period.
-///
-/// Passed as one parameter to `finalize_billing_statement` to stay within Soroban's
-/// 10-parameter contract function limit.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PeriodStatementAmounts {
-    pub total_amount_charged: i128,
-    pub total_usage_units: i128,
-    pub protocol_fee_amount: i128,
-    pub net_amount_to_merchant: i128,
-    pub refund_amount: i128,
-}
-
-/// Per-period billing record written at period close, cancellation, or final settlement.
->>>>>>> main
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PeriodBillingStatement {
     pub subscription_id: u32,
-<<<<<<< Implement-billing-statements-generation-and-retention-policy-with-stable-query-interface
     /// Monotonic period counter for this subscription (0-indexed from creation).
     pub period_index: u32,
     /// Period index of the associated billing snapshot, if any.
-=======
-    pub period_index: u32,
->>>>>>> main
     pub snapshot_period_index: u32,
     pub merchant: Address,
     pub subscriber: Address,
     pub token: Address,
     pub period_start_timestamp: u64,
     pub period_end_timestamp: u64,
-<<<<<<< Implement-billing-statements-generation-and-retention-policy-with-stable-query-interface
     /// Sum of all charges (interval + usage + one-off) debited this period.
     pub total_amount_charged: i128,
     /// Total metered usage units billed this period (0 for non-usage subscriptions).
@@ -732,28 +746,10 @@ pub struct PeriodBillingStatement {
     /// Total amount refunded to the subscriber in this period.
     pub refund_amount: i128,
     /// Bit flags encoding per-period status. See `docs/billing_statements.md`.
-=======
-    pub total_amount_charged: i128,
-    pub total_usage_units: i128,
-    pub protocol_fee_amount: i128,
-    pub net_amount_to_merchant: i128,
-    pub refund_amount: i128,
->>>>>>> main
     pub status_flags: u32,
     pub subscription_status: SubscriptionStatus,
     pub finalized_by: BillingStatementFinalization,
     pub finalized_at: u64,
-}
-
-<<<<<<< Implement-billing-statements-generation-and-retention-policy-with-stable-query-interface
-/// Event emitted each time a period billing statement is written or overwritten.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct BillingStatementPersistedEvent {
-    pub subscription_id: u32,
-    pub period_index: u32,
-    pub merchant: Address,
-    pub finalized_by: BillingStatementFinalization,
 }
 
 // ── status_flags bit constants (used by PeriodBillingStatement.status_flags) ─
@@ -767,13 +763,6 @@ pub const STMT_FLAG_ONEOFF_CHARGED: u32   = 0b0000_0100;
 /// Subscription was cancelled during this period.
 pub const STMT_FLAG_CANCELLED: u32        = 0b0000_1000;
 /// Subscriber withdrew remaining balance; period is fully settled.
-=======
-/// `status_flags` bit constants for `PeriodBillingStatement`.
-pub const STMT_FLAG_INTERVAL_CHARGED: u32 = 0b0000_0001;
-pub const STMT_FLAG_USAGE_CHARGED: u32    = 0b0000_0010;
-pub const STMT_FLAG_ONEOFF_CHARGED: u32   = 0b0000_0100;
-pub const STMT_FLAG_CANCELLED: u32        = 0b0000_1000;
->>>>>>> main
 pub const STMT_FLAG_SETTLED: u32          = 0b0001_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1080,6 +1069,20 @@ pub struct MetadataDeletedEvent {
 /// Event emitted when a plan template is updated to a new version.
 #[contracttype]
 #[derive(Clone, Debug)]
+pub struct PlanTemplateCreatedEvent {
+    pub plan_template_id: u32,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval_seconds: u64,
+    pub usage_enabled: bool,
+    pub lifetime_cap: Option<i128>,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a plan template is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
 pub struct PlanTemplateUpdatedEvent {
     /// Logical template group identifier shared by all versions.
     pub template_key: u32,
@@ -1288,6 +1291,7 @@ pub struct MerchantRefundEvent {
     pub subscriber: Address,
     pub token: Address,
     pub amount: i128,
+    pub timestamp: u64,
 }
 
 /// Event emitted when protocol fees are configured.
