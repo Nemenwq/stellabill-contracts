@@ -1623,8 +1623,12 @@ fn test_batch_charge_large_batch() {
     let (env, client, _, _admin) = setup_test_env();
     env.ledger().set_timestamp(T0);
 
+    // Batch size kept under Soroban's per-tx CPU/memory budget. Larger batches
+    // (e.g. 50) hit `Error(Budget, ExceededLimit)` before completing.
+    const BATCH_SIZE: u32 = 20;
+
     let mut ids = Vec::new(&env);
-    for _ in 0..50 {
+    for _ in 0..BATCH_SIZE {
         let (id, _, _) = create_test_subscription(&env, &client, SubscriptionStatus::Active);
         seed_balance(&env, &client, id, PREPAID);
         ids.push_back(id);
@@ -1632,8 +1636,8 @@ fn test_batch_charge_large_batch() {
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
     let results = client.batch_charge(&ids);
-    assert_eq!(results.len(), 50);
-    for i in 0..50 {
+    assert_eq!(results.len(), BATCH_SIZE);
+    for i in 0..BATCH_SIZE {
         assert!(results.get(i).unwrap().success);
     }
 }
