@@ -1331,7 +1331,7 @@ pub fn do_update_plan_template(
     // Enforce usage flag consistency: usage_enabled cannot be changed through versioning
     // to prevent accidental billing model shifts for downstream subscribers.
     if usage_enabled != existing.usage_enabled {
-        return Err(Error::InvalidInput);
+        return Err(Error::CannotChangeUsageMode);
     }
 
     let new_plan_id = next_plan_id(env);
@@ -1413,7 +1413,7 @@ pub fn do_migrate_subscription_to_plan(
 
     // For safety, do not allow billing model switches via migration.
     if new_plan.usage_enabled != sub.usage_enabled {
-        return Err(Error::InvalidInput);
+        return Err(Error::CannotChangeUsageMode);
     }
 
     // Enforce compatibility of lifetime caps: cannot migrate into a cap that is already exceeded.
