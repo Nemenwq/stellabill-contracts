@@ -33,6 +33,7 @@
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
 use crate::state_machine::validate_status_transition;
+use crate::subscription::next_charge_time;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, ChargeExecutionResult, DataKey, Error,
@@ -131,10 +132,7 @@ pub fn charge_one(
         }
     }
 
-    let next_allowed = sub
-        .last_payment_timestamp
-        .checked_add(sub.interval_seconds)
-        .ok_or(Error::Overflow)?;
+    let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
     if now < next_allowed {
         return Err(Error::IntervalNotElapsed);
     }
@@ -270,7 +268,9 @@ pub fn charge_one(
                 (symbol_short!("charged"),),
                 SubscriptionChargedEvent {
                     subscription_id,
+                    subscriber: sub.subscriber.clone(),
                     merchant: sub.merchant.clone(),
+                    token: sub.token.clone(),
                     amount: charge_amount,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
@@ -344,7 +344,7 @@ pub fn charge_usage_one(
     subscription_id: u32,
     usage_amount: i128,
     reference: String,
-) -> Result<(), Error> {
+) -> Result<UsageChargeResult, Error> {
     let mut sub = get_subscription(env, subscription_id)?;
     let merchant = sub.merchant.clone();
 
@@ -416,7 +416,19 @@ pub fn charge_usage_one(
     );
 
     if env.storage().instance().has(&ref_key) {
-        return Err(Error::Replay);
+        env.events().publish(
+            (Symbol::new(env, "usage_charge_rejected"), subscription_id),
+            UsageChargeRejectedEvent {
+                subscription_id,
+                merchant: sub.merchant.clone(),
+                token: sub.token.clone(),
+                usage_amount,
+                timestamp: now,
+                reference,
+                result: UsageChargeResult::Replay,
+            },
+        );
+        return Ok(UsageChargeResult::Replay);
     }
 
     // -- Usage Limits & State -------------------------------------------------
@@ -442,7 +454,19 @@ pub fn charge_usage_one(
         if limits.burst_min_interval_secs > 0 {
             let elapsed = now.saturating_sub(state.last_usage_timestamp);
             if elapsed < limits.burst_min_interval_secs {
-                return Err(Error::BurstLimitExceeded);
+                env.events().publish(
+                    (Symbol::new(env, "usage_charge_rejected"), subscription_id),
+                    UsageChargeRejectedEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        usage_amount,
+                        timestamp: now,
+                        reference,
+                        result: UsageChargeResult::BurstLimitExceeded,
+                    },
+                );
+                return Ok(UsageChargeResult::BurstLimitExceeded);
             }
         }
 
@@ -457,7 +481,19 @@ pub fn charge_usage_one(
                 state.window_call_count = 0;
             }
             if state.window_call_count >= max_calls {
-                return Err(Error::RateLimitExceeded);
+                env.events().publish(
+                    (Symbol::new(env, "usage_charge_rejected"), subscription_id),
+                    UsageChargeRejectedEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        usage_amount,
+                        timestamp: now,
+                        reference,
+                        result: UsageChargeResult::RateLimitExceeded,
+                    },
+                );
+                return Ok(UsageChargeResult::RateLimitExceeded);
             }
         }
 
@@ -473,7 +509,19 @@ pub fn charge_usage_one(
                 .saturating_add(usage_amount)
                 > cap_units
             {
-                return Err(Error::UsageCapExceeded);
+                env.events().publish(
+                    (Symbol::new(env, "usage_charge_rejected"), subscription_id),
+                    UsageChargeRejectedEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        usage_amount,
+                        timestamp: now,
+                        reference,
+                        result: UsageChargeResult::UsageCapExceeded,
+                    },
+                );
+                return Ok(UsageChargeResult::UsageCapExceeded);
             }
         }
 
@@ -503,7 +551,7 @@ pub fn charge_usage_one(
                     timestamp: now,
                 },
             );
-            return Ok(());
+            return Ok(UsageChargeResult::Charged);
         }
     }
 
@@ -571,7 +619,7 @@ pub fn charge_usage_one(
                     );
                 }
             }
-            Ok(())
+            Ok(UsageChargeResult::Charged)
         }
         Err(_) => {
             validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
@@ -590,7 +638,7 @@ pub fn charge_usage_one(
                     timestamp: now,
                 },
             );
-            Ok(())
+            Ok(UsageChargeResult::Charged)
         }
     }
 }

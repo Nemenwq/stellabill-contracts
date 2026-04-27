@@ -53,6 +53,47 @@ use crate::types::{
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
+/// Hard upper bound on billing interval: 365 days (31 536 000 s).
+///
+/// Prevents absurdly large intervals from making `last_payment_timestamp +
+/// interval_seconds` overflow `u64` in practice, and keeps subscriptions
+/// semantically reasonable.
+pub const MAX_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 31_536_000;
+
+/// Validates that `interval_seconds` is within the allowed `[MIN, MAX]` range.
+///
+/// Returns `Err(Error::InvalidInput)` when the value is below the minimum (60 s)
+/// or above the maximum (365 days).  Zero is implicitly rejected because
+/// `MIN_SUBSCRIPTION_INTERVAL_SECONDS` is non-zero.
+///
+/// This is the single authoritative validation gate: every code path that
+/// persists an interval (subscription creation, plan-template creation) must
+/// call this function rather than performing ad-hoc comparisons.
+pub fn validate_interval(interval_seconds: u64) -> Result<(), Error> {
+    if interval_seconds < MIN_SUBSCRIPTION_INTERVAL_SECONDS
+        || interval_seconds > MAX_SUBSCRIPTION_INTERVAL_SECONDS
+    {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+
+/// Returns the earliest timestamp at which the *next* charge is allowed.
+///
+/// `next_charge_time(last, interval) == last + interval`
+///
+/// This is the canonical time-math helper.  Both the charge path
+/// (`charge_core.rs`) and the query path (`queries.rs`) must use this
+/// function instead of computing `last + interval` inline, so that the
+/// semantics are identical across all call sites.
+///
+/// Returns `Err(Error::Overflow)` if the addition would wrap past `u64::MAX`.
+/// In practice this cannot happen for validated intervals (≤ 365 days) and
+/// real ledger timestamps, but the checked arithmetic is retained as a
+/// belt-and-suspenders guard.
+pub fn next_charge_time(last_payment: u64, interval: u64) -> Result<u64, Error> {
+    last_payment.checked_add(interval).ok_or(Error::Overflow)
+}
 
 /// Hard upper bound on the number of subscription IDs that may be scanned in a
 /// single write-path helper invocation.
@@ -317,9 +358,7 @@ pub fn do_create_subscription_with_token(
         return Err(Error::InvalidAmount);
     }
 
-    if interval_seconds < MIN_SUBSCRIPTION_INTERVAL_SECONDS {
-        return Err(Error::InvalidInput);
-    }
+    validate_interval(interval_seconds)?;
 
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
@@ -466,9 +505,11 @@ pub fn do_deposit_funds(
         (Symbol::new(env, "deposited"), subscription_id),
         FundsDepositedEvent {
             subscription_id,
-            subscriber,
+            subscriber: subscriber.clone(),
+            token: token_addr.clone(),
             amount,
-            prepaid_balance: sub.prepaid_balance,
+            new_balance: sub.prepaid_balance,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -494,7 +535,10 @@ pub fn do_deposit_funds(
             (Symbol::new(env, "sub_resumed"), subscription_id),
             crate::types::SubscriptionResumedEvent {
                 subscription_id,
+                subscriber: sub.subscriber.clone(),
+                merchant: sub.merchant.clone(),
                 authorizer: sub.subscriber.clone(),
+                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -529,8 +573,12 @@ pub fn do_cancel_subscription(
         (Symbol::new(env, "subscription_cancelled"), subscription_id),
         SubscriptionCancelledEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            token: sub.token.clone(),
             authorizer,
             refund_amount,
+            timestamp: env.ledger().timestamp(),
         },
     );
     Ok(())
@@ -580,7 +628,10 @@ pub fn do_pause_subscription(
         (Symbol::new(env, "sub_paused"), subscription_id),
         crate::types::SubscriptionPausedEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
             authorizer,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -635,12 +686,15 @@ pub fn do_resume_subscription(
     sub.status = SubscriptionStatus::Active;
     env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
-    env.events().publish(
+     env.events().publish(
         (Symbol::new(env, "sub_resumed"), subscription_id),
         crate::types::SubscriptionResumedEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
             authorizer,
             previous_status,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -777,8 +831,12 @@ pub fn do_charge_one_off(
         (symbol_short!("oneoff_ch"), subscription_id),
         crate::types::OneOffChargedEvent {
             subscription_id,
+            subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
+            token: sub.token.clone(),
             amount,
+            remaining_balance: sub.prepaid_balance,
+            timestamp: now,
         },
     );
 
@@ -883,7 +941,9 @@ pub fn do_withdraw_subscriber_funds(
         SubscriberWithdrawalEvent {
             subscription_id,
             subscriber,
+            token: token_addr,
             amount: amount_to_refund,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -943,6 +1003,7 @@ pub fn do_partial_refund(
         PartialRefundEvent {
             subscription_id,
             subscriber,
+            token: sub.token.clone(),
             amount,
             timestamp: env.ledger().timestamp(),
         },
@@ -1106,6 +1167,8 @@ pub fn do_create_plan_template(
 ) -> Result<u32, Error> {
     merchant.require_auth();
 
+    validate_interval(interval_seconds)?;
+
     // Validate lifetime_cap if provided
     if let Some(cap) = lifetime_cap {
         if cap <= 0 {
@@ -1116,18 +1179,33 @@ pub fn do_create_plan_template(
     let token = crate::admin::get_token(env)?;
     let plan_id = next_plan_id(env);
     let plan = PlanTemplate {
-        merchant,
-        token,
+        merchant: merchant.clone(),
+        token: token.clone(),
         amount,
         interval_seconds,
         usage_enabled,
         lifetime_cap,
         template_key: plan_id,
         version: 1,
+        is_disabled: false,
     };
 
     let key = DataKey::Plan(plan_id);
     env.storage().instance().set(&key, &plan);
+
+    env.events().publish(
+        (Symbol::new(env, "plan_created"), plan_id),
+        crate::types::PlanTemplateCreatedEvent {
+            plan_template_id: plan_id,
+            merchant,
+            token,
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(plan_id)
 }
@@ -1142,6 +1220,7 @@ pub fn do_create_plan_template_with_token(
     lifetime_cap: Option<i128>,
 ) -> Result<u32, Error> {
     merchant.require_auth();
+    validate_interval(interval_seconds)?;
     if !crate::admin::is_token_accepted(env, &token) {
         return Err(Error::InvalidInput);
     }
@@ -1153,18 +1232,34 @@ pub fn do_create_plan_template_with_token(
 
     let plan_id = next_plan_id(env);
     let plan = PlanTemplate {
-        merchant,
-        token,
+        merchant: merchant.clone(),
+        token: token.clone(),
         amount,
         interval_seconds,
         usage_enabled,
         lifetime_cap,
         template_key: plan_id,
         version: 1,
+        is_disabled: false,
     };
 
     let key = DataKey::Plan(plan_id);
     env.storage().instance().set(&key, &plan);
+
+    env.events().publish(
+        (Symbol::new(env, "plan_created"), plan_id),
+        crate::types::PlanTemplateCreatedEvent {
+            plan_template_id: plan_id,
+            merchant,
+            token,
+            amount,
+            interval_seconds,
+            usage_enabled,
+            lifetime_cap,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
     Ok(plan_id)
 }
 
@@ -1177,6 +1272,10 @@ pub fn do_create_subscription_from_plan(
     crate::blocklist::require_not_blocklisted(env, &subscriber)?;
 
     let plan = get_plan_template(env, plan_template_id)?;
+
+    if plan.is_disabled {
+        return Err(Error::InvalidInput);
+    }
 
     // Enforce subscriber-level credit limit for the plan's token.
     enforce_credit_limit_for_delta(env, &subscriber, &plan.token, plan.amount)?;
@@ -1234,6 +1333,21 @@ pub fn do_create_subscription_from_plan(
     token_ids.push_back(id);
     env.storage().instance().set(&token_key, &token_ids);
 
+    env.events().publish(
+        (symbol_short!("created"), id),
+        SubscriptionCreatedEvent {
+            subscription_id: id,
+            subscriber: subscriber.clone(),
+            merchant: plan.merchant.clone(),
+            token: plan.token.clone(),
+            amount: plan.amount,
+            interval_seconds: plan.interval_seconds,
+            lifetime_cap: plan.lifetime_cap,
+            expires_at: None,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
     Ok(id)
 }
 
@@ -1247,6 +1361,8 @@ pub fn do_update_plan_template(
     lifetime_cap: Option<i128>,
 ) -> Result<u32, Error> {
     merchant.require_auth();
+
+    validate_interval(interval_seconds)?;
 
     // Validate lifetime_cap if provided
     if let Some(cap) = lifetime_cap {
@@ -1266,7 +1382,7 @@ pub fn do_update_plan_template(
     // Enforce usage flag consistency: usage_enabled cannot be changed through versioning
     // to prevent accidental billing model shifts for downstream subscribers.
     if usage_enabled != existing.usage_enabled {
-        return Err(Error::InvalidInput);
+        return Err(Error::CannotChangeUsageMode);
     }
 
     let new_plan_id = next_plan_id(env);
@@ -1280,6 +1396,7 @@ pub fn do_update_plan_template(
         lifetime_cap,
         template_key: existing.template_key,
         version: new_version,
+        is_disabled: false,
     };
 
     let key = DataKey::Plan(new_plan_id);
@@ -1301,6 +1418,38 @@ pub fn do_update_plan_template(
     );
 
     Ok(new_plan_id)
+}
+
+pub fn do_disable_plan_template(
+    env: &Env,
+    merchant: Address,
+    plan_template_id: u32,
+) -> Result<(), Error> {
+    merchant.require_auth();
+
+    let mut plan = get_plan_template(env, plan_template_id)?;
+    if plan.merchant != merchant {
+        return Err(Error::Forbidden);
+    }
+
+    if plan.is_disabled {
+        return Ok(());
+    }
+
+    plan.is_disabled = true;
+    let key = (Symbol::new(env, "plan"), plan_template_id);
+    env.storage().instance().set(&key, &plan);
+
+    env.events().publish(
+        (Symbol::new(env, "plan_disabled"), plan_template_id),
+        crate::types::PlanTemplateDisabledEvent {
+            plan_template_id,
+            merchant,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    Ok(())
 }
 
 pub fn do_migrate_subscription_to_plan(
@@ -1348,7 +1497,7 @@ pub fn do_migrate_subscription_to_plan(
 
     // For safety, do not allow billing model switches via migration.
     if new_plan.usage_enabled != sub.usage_enabled {
-        return Err(Error::InvalidInput);
+        return Err(Error::CannotChangeUsageMode);
     }
 
     // Enforce compatibility of lifetime caps: cannot migrate into a cap that is already exceeded.
@@ -1493,6 +1642,19 @@ pub fn do_configure_usage_limits(
     env.storage()
         .instance()
         .set(&DataKey::UsageLimits(subscription_id), &limits);
+
+    env.events().publish(
+        (Symbol::new(env, "usage_limits_configured"), subscription_id),
+        UsageLimitsConfiguredEvent {
+            subscription_id,
+            merchant,
+            rate_limit_max_calls,
+            rate_window_secs,
+            burst_min_interval_secs,
+            usage_cap_units,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(())
 }

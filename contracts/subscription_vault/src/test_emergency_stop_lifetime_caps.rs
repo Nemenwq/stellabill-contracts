@@ -338,6 +338,10 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
     client.charge_one_off(&sub_id, &merchant, &cap);
     let events = env.events().all();
 
+    // Capture events immediately after the mutating call.
+    // In this test environment, subsequent view calls may reset the event buffer.
+    let events = env.events().all();
+
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.lifetime_charged, cap);

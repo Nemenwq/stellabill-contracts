@@ -73,6 +73,7 @@
 // ── Modules ──────────────────────────────────────────────────────────────────
 mod accounting;
 mod admin;
+mod billing_statements;
 mod blocklist;
 mod charge_core;
 mod merchant;
@@ -139,11 +140,13 @@ pub use types::{
     MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
     MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent,
-    ProtocolFeeConfiguredEvent, RecoveryEvent,
-    RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
+    SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
+    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
+    SubscriptionArchivedEvent, SubscriptionExpiredEvent,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
@@ -1233,7 +1236,11 @@ impl SubscriptionVault {
     /// This function acquires a reentrancy guard to prevent recursive calls during
     /// state mutations. The guard is automatically released (even on error) via the
     /// Drop trait, guaranteeing cleanup.
-    pub fn charge_usage(env: Env, subscription_id: u32, usage_amount: i128) -> Result<(), Error> {
+    pub fn charge_usage(
+        env: Env,
+        subscription_id: u32,
+        usage_amount: i128,
+    ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
 
         // Acquire reentrancy guard
@@ -1260,7 +1267,7 @@ impl SubscriptionVault {
         subscription_id: u32,
         usage_amount: i128,
         reference: String,
-    ) -> Result<(), Error> {
+    ) -> Result<UsageChargeResult, Error> {
         require_not_emergency_stop(&env)?;
 
         // Acquire reentrancy guard

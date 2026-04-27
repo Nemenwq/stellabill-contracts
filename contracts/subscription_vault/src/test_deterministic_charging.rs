@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::test_utils::setup::TestEnv;
-use crate::types::{ChargeExecutionResult, Error};
+use crate::types::{ChargeExecutionResult, Error, UsageChargeResult};
 use soroban_sdk::{testutils::Address as _, Address, String};
 
 #[test]
