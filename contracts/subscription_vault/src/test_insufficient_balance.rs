@@ -1,4 +1,6 @@
-use crate::{ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
+use crate::{
+    ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env};
 
@@ -21,7 +23,15 @@ fn setup_test_env() -> (Env, SubscriptionVaultClient<'static>, Address) {
 fn create_subscription(env: &Env, client: &SubscriptionVaultClient) -> (u32, Address, Address) {
     let subscriber = Address::generate(env);
     let merchant = Address::generate(env);
-    let id = client.create_subscription(&subscriber, &merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    let id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+    );
     (id, subscriber, merchant)
 }
 
@@ -93,6 +103,37 @@ fn charge_with_exactly_equal_balance_succeeds() {
     assert_eq!(after.prepaid_balance, 0);
     assert_eq!(after.status, SubscriptionStatus::Active);
     assert_eq!(after.lifetime_charged, AMOUNT);
+}
+
+#[test]
+fn deposit_insufficient_token_balance_reverts_no_state_change() {
+    let (env, client, token) = setup_test_env();
+    let (id, subscriber, _merchant) = create_subscription(&env, &client);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&subscriber, &500_000i128);
+    let initial_sub = client.get_subscription(&id);
+    assert_eq!(initial_sub.prepaid_balance, 0);
+    let result = client.try_deposit_funds(&id, &subscriber, &2_000_000i128);
+    assert!(result.is_err());
+    let after_fail = client.get_subscription(&id);
+    assert_eq!(after_fail.prepaid_balance, 0);
+    assert_eq!(after_fail.status, initial_sub.status);
+}
+
+#[test]
+fn deposit_respects_subscriber_credit_limit() {
+    let (env, client, token) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let admin = client.get_admin();
+    client.set_subscriber_credit_limit(&admin, &subscriber, &token, &5_000_000i128);
+    let id = client.create_subscription(&subscriber, &merchant, &3_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&subscriber, &10_000_000i128);
+    client.deposit_funds(&id, &subscriber, &2_000_000i128);
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 2_000_000);
+    let result = client.try_deposit_funds(&id, &subscriber, &4_000_000i128);
+    assert_eq!(result, Err(Ok(Error::CreditLimitExceeded)));
 }
 
 #[test]
