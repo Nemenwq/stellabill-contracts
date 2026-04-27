@@ -73,6 +73,7 @@
 // ── Modules ──────────────────────────────────────────────────────────────────
 mod accounting;
 mod admin;
+mod billing_statements;
 mod blocklist;
 mod charge_core;
 mod merchant;
