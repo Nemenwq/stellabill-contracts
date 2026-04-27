@@ -35,7 +35,7 @@ use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
 use crate::state_machine::validate_status_transition;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, ChargeExecutionResult, DataKey, Error,
+    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
     LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageLimits, UsageState, UsageStatementEvent,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,

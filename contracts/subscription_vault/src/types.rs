@@ -57,21 +57,21 @@ pub enum DataKey {
     /// Maps a merchant address to its list of subscription IDs. Discriminant 0.
     MerchantSubs(Address),
     /// USDC token contract address. Discriminant 1.
-    Token = 1,
+    Token,
     /// Authorized admin address. Discriminant 2.
-    Admin = 2,
+    Admin,
     /// Minimum deposit threshold. Discriminant 3.
-    MinTopup = 3,
+    MinTopup,
     /// Auto-incrementing subscription ID counter. Discriminant 4.
-    NextId = 4,
+    NextId,
     /// On-chain storage schema version. Discriminant 5.
-    SchemaVersion = 5,
+    SchemaVersion,
     /// Subscription record keyed by its ID. Discriminant 6.
-    Sub(u32) = 6,
+    Sub(u32),
     /// Last charged billing-period index for replay protection. Discriminant 7.
-    ChargedPeriod(u32) = 7,
+    ChargedPeriod(u32),
     /// Idempotency key stored per subscription. Discriminant 8.
-    IdemKey(u32) = 8,
+    IdemKey(u32),
     /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
     EmergencyStop,
     /// Merchant-wide pause flag. Discriminant 10.
@@ -123,6 +123,10 @@ pub enum DataKey {
     /// Maps a subscriber address to their blocklist status. Discriminant 33.
     Blocklist(Address),
     Oracle,
+    /// Period-end billing snapshot keyed by (subscription_id, period_index).
+    BillingPeriodSnapshot(u32, u64),
+    /// Secondary index of period snapshot refs for a subscription.
+    BillingPeriodSnapshotIndex(u32),
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -333,6 +337,14 @@ pub enum Error {
     UsageCapExceeded = 6009,
     /// Usage charge attempted too soon after previous charge (burst protection).
     BurstLimitExceeded = 6010,
+
+    // --- Merchant Config (7000-7099) ---
+    /// Fee basis points exceed the maximum allowed (10,000).
+    InvalidFeeBips = 7001,
+    /// Invalid allowed operations bitmap for merchant config.
+    InvalidOperations = 7002,
+    /// Merchant config must allow the charge operation.
+    MustAllowChargeOperation = 7003,
 }
 
 impl Error {
@@ -1179,7 +1191,7 @@ pub struct MerchantRefundEvent {
     pub amount: i128,
 }
 
-/// Event emitted when a protocol fee is charged.
+/// Event emitted when protocol fees are configured.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeConfiguredEvent {
@@ -1189,12 +1201,66 @@ pub struct ProtocolFeeConfiguredEvent {
     pub timestamp: u64,
 }
 
-/// Event emitted when protocol fees are configured.
+/// Event emitted when a protocol fee is charged during a subscription billing.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct ProtocolFeeConfiguredEvent {
-    pub admin: Address,
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
     pub treasury: Address,
-    pub fee_bps: u32,
+    pub fee_amount: i128,
+    pub merchant_amount: i128,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a merchant's config is first initialized.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantConfigInitializedEvent {
+    pub merchant: Address,
+    pub payout_address: Address,
+    pub fee_bips: i32,
+    pub allowed_operations: i32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a merchant's config is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantConfigUpdatedEvent {
+    pub merchant: Address,
+    pub payout_address: Address,
+    pub fee_bips: i32,
+    pub allowed_operations: i32,
+    pub is_active: bool,
+    pub timestamp: u64,
+}
+
+/// Event emitted when the global lifetime cap default is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct GlobalCapDefaultUpdatedEvent {
+    pub admin: Address,
+    pub old_default: Option<i128>,
+    pub new_default: Option<i128>,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a merchant's cap default is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantCapDefaultUpdatedEvent {
+    pub merchant: Address,
+    pub old_default: Option<i128>,
+    pub new_default: Option<i128>,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a subscription's lifetime cap is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LifetimeCapUpdatedEvent {
+    pub subscription_id: u32,
+    pub old_cap: Option<i128>,
+    pub new_cap: Option<i128>,
     pub timestamp: u64,
 }

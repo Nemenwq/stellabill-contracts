@@ -22,8 +22,10 @@
 
 use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
+    MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+    is_valid_allowed_operations, MAX_FEE_BIPS, OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -443,4 +445,73 @@ pub fn merchant_refund(
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
 
     Ok(())
+}
+
+pub fn update_merchant_config(
+    env: &Env,
+    merchant: Address,
+    new_payout_address: Option<Address>,
+    new_fee_bips: Option<i32>,
+    new_allowed_operations: Option<i32>,
+    new_is_active: Option<bool>,
+    new_fee_address: Option<Option<Address>>,
+    new_redirect_url: Option<soroban_sdk::String>,
+    new_is_paused: Option<bool>,
+) -> Result<MerchantConfig, Error> {
+    merchant.require_auth();
+
+    let key = DataKey::MerchantConfig(merchant.clone());
+    let mut config: MerchantConfig = env
+        .storage()
+        .instance()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
+
+    if let Some(payout) = new_payout_address {
+        config.payout_address = payout;
+    }
+    if let Some(bips) = new_fee_bips {
+        if bips > MAX_FEE_BIPS {
+            return Err(Error::InvalidFeeBips);
+        }
+        config.fee_bips = bips;
+    }
+    if let Some(ops) = new_allowed_operations {
+        if !is_valid_allowed_operations(ops) {
+            return Err(Error::InvalidOperations);
+        }
+        if ops & OP_CHARGE == 0 {
+            return Err(Error::MustAllowChargeOperation);
+        }
+        config.allowed_operations = ops;
+    }
+    if let Some(active) = new_is_active {
+        config.is_active = active;
+    }
+    if let Some(fee_addr) = new_fee_address {
+        config.fee_address = fee_addr;
+    }
+    if let Some(url) = new_redirect_url {
+        config.redirect_url = url;
+    }
+    if let Some(paused) = new_is_paused {
+        config.is_paused = paused;
+    }
+
+    config.last_updated = env.ledger().timestamp();
+    env.storage().instance().set(&key, &config);
+
+    env.events().publish(
+        (soroban_sdk::Symbol::new(env, "merchant_config_updated"),),
+        MerchantConfigUpdatedEvent {
+            merchant: merchant.clone(),
+            payout_address: config.payout_address.clone(),
+            fee_bips: config.fee_bips,
+            allowed_operations: config.allowed_operations,
+            is_active: config.is_active,
+            timestamp: config.last_updated,
+        },
+    );
+
+    Ok(config)
 }

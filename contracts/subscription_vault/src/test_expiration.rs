@@ -141,7 +141,7 @@ fn test_expiration_vs_cancellation() {
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
 
-    let _expires_at = T0 + 2 * INTERVAL;
+    let expires_at = T0 + 2 * INTERVAL;
 
     // Scenario 1: Cancel before expiry
     let sub_id1 = client.create_subscription_with_token(

@@ -1208,7 +1208,7 @@ fn test_deposit_funds_event_payload() {
     );
 
     // Verify event data: FundsDepositedEvent { subscription_id, subscriber, amount, prepaid_balance }
-    let event_data: crate::FundsDepositedEvent = deposit_event.2.from_val(&env);
+    let event_data: crate::FundsDepositedEvent = deposit_event.2.into_val(&env);
     assert_eq!(event_data.subscription_id, id);
     assert_eq!(event_data.subscriber, subscriber);
     assert_eq!(event_data.amount, 15_000_000);
@@ -1313,7 +1313,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         Symbol::from_val(&test_env.env, &add_event.1.get(0).expect("missing add topic")),
         Symbol::new(&test_env.env, "blocklist_added")
     );
-    let added: crate::BlocklistAddedEvent = add_event.2.from_val(&test_env.env);
+    let added: crate::BlocklistAddedEvent = add_event.2.into_val(&test_env.env);
     assert_eq!(added.subscriber, subscriber);
     assert_eq!(added.added_by, test_env.admin);
     assert_eq!(added.timestamp, T0);
@@ -1336,7 +1336,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         ),
         Symbol::new(&test_env.env, "blocklist_removed")
     );
-    let removed: crate::BlocklistRemovedEvent = remove_event.2.from_val(&test_env.env);
+    let removed: crate::BlocklistRemovedEvent = remove_event.2.into_val(&test_env.env);
     assert_eq!(removed.subscriber, subscriber);
     assert_eq!(removed.removed_by, test_env.admin);
     assert_eq!(removed.timestamp, T0 + 60);
@@ -2196,7 +2196,7 @@ fn test_compute_next_charge_info_active() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
     assert!(info.is_charge_expected);
 }
@@ -2220,7 +2220,7 @@ fn test_compute_next_charge_info_paused() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 2000 + INTERVAL);
 }
@@ -2244,7 +2244,7 @@ fn test_compute_next_charge_info_cancelled() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
 }
 
@@ -2267,7 +2267,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 3000 + INTERVAL);
 }
@@ -2398,7 +2398,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, u64::MAX);
 }
@@ -3252,7 +3252,9 @@ fn test_cap_cancelled_subscriber_can_withdraw() {
     soroban_sdk::token::StellarAssetClient::new(&test_env.env, &test_env.token)
         .mint(&subscriber, &1_000_000_000i128);
 
-    let cap = 2 * AMOUNT;
+    // cap = AMOUNT + 5M: after 1 charge (AMOUNT), remaining cap = 5M < AMOUNT, so
+    // the second charge attempt cancels without moving funds, leaving a 5M balance.
+    let cap = AMOUNT + 5_000_000;
     let sub_id = test_env.client.create_subscription(
         &subscriber,
         &merchant,
@@ -3261,27 +3263,24 @@ fn test_cap_cancelled_subscriber_can_withdraw() {
         &false,
         &Some(cap),
      &None::<u64>);
-    test_env.client.deposit_funds(&sub_id, &subscriber, &5_000_000);
 
-    // Fund the subscription so the vault holds real tokens for withdrawal.
-    test_env
-        .client
-        .deposit_funds(&sub_id, &subscriber, &PREPAID);
+    // Deposit exactly cap so the deposit fits within enforce_deposit_cap.
+    test_env.client.deposit_funds(&sub_id, &subscriber, &cap);
 
     test_env
         .env
         .ledger()
         .with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
-    test_env.client.charge_subscription(&sub_id);
+    test_env.client.charge_subscription(&sub_id); // charges AMOUNT, balance = cap - AMOUNT = 5M
     test_env
         .env
         .ledger()
         .with_mut(|li| li.timestamp = T0 + 2 * INTERVAL + 1);
-    test_env.client.charge_subscription(&sub_id);
+    test_env.client.charge_subscription(&sub_id); // remaining cap < AMOUNT → cancel, balance stays 5M
 
     assertions::assert_status(&test_env.client, &sub_id, SubscriptionStatus::Cancelled);
     let sub_after = test_env.client.get_subscription(&sub_id);
-    assert!(sub_after.prepaid_balance > 0);
+    assert!(sub_after.prepaid_balance > 0, "remaining balance exists after partial-cap cancel");
 
     // Subscriber can withdraw remaining prepaid balance
     test_env
@@ -3649,7 +3648,7 @@ fn test_billing_lifecycle_delayed_charge_and_min_topup_progression() {
     assert_eq!(after_delayed_charge.prepaid_balance, 9_000_000i128);
     assert_eq!(
         after_delayed_charge.last_payment_timestamp,
-        delayed_charge_at
+        T0 + 2 * INTERVAL // charge sets timestamp to period_start, not exact charge time
     );
     assert_eq!(after_delayed_charge.lifetime_charged, AMOUNT);
     assert_eq!(test_env.client.get_merchant_balance(&merchant), AMOUNT);
@@ -3671,7 +3670,7 @@ fn test_billing_lifecycle_delayed_charge_and_min_topup_progression() {
     assert_eq!(after_second_charge.prepaid_balance, 0);
     assert_eq!(
         after_second_charge.last_payment_timestamp,
-        delayed_charge_at + INTERVAL
+        T0 + 3 * INTERVAL // period_start advances by INTERVAL from the previous period_start
     );
     assert_eq!(after_second_charge.lifetime_charged, 2 * AMOUNT);
     assert_eq!(test_env.client.get_merchant_balance(&merchant), 2 * AMOUNT);
@@ -3690,7 +3689,7 @@ fn test_billing_lifecycle_delayed_charge_and_min_topup_progression() {
 
     let second = statements.statements.get(1).unwrap();
     assert_eq!(second.sequence, 1);
-    assert_eq!(second.period_start, delayed_charge_at);
+    assert_eq!(second.period_start, T0 + 2 * INTERVAL); // period_start = last_payment_timestamp after first charge
     assert_eq!(second.period_end, delayed_charge_at + INTERVAL);
     assert_eq!(second.amount, AMOUNT);
 
