@@ -140,6 +140,8 @@ fn test_expiration_vs_cancellation() {
     let (env, client, token_client, token_admin, _) = setup_test_env();
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
+    let min_topup = 1_000_000i128;
+    token_admin.mint(&subscriber, &(min_topup * 5));
 
     let expires_at = T0 + 2 * INTERVAL;
 

@@ -1,18 +1,4 @@
 //! Period-end billing statement storage, indexing, and queries.
-//!
-//! Each `PeriodBillingStatement` captures the full financial summary of one
-//! billing period: amounts charged, fees, refunds, status flags, and how the
-//! period was finalized (periodic close, cancellation, or final settlement).
-//!
-//! Two secondary indices keep per-subscription and per-merchant lookups O(index
-//! size) instead of requiring a full contract-state scan:
-//!
-//! - `DataKey::BillingStatementsBySubscription(sub_id)` → `Vec<BillingStatementRef>`
-//! - `DataKey::BillingStatementsByMerchant(merchant)` → `Vec<BillingStatementRef>`
-//!
-//! `upsert_statement` is idempotent: a second call with the same
-//! `(subscription_id, period_index)` overwrites the record and skips duplicate
-//! index entries.
 
 use soroban_sdk::{symbol_short, Address, Env, Vec};
 
@@ -20,8 +6,6 @@ use crate::types::{
     BillingStatementFinalization, BillingStatementPersistedEvent, BillingStatementRef, DataKey,
     Error, PeriodBillingStatement, SubscriptionStatus,
 };
-
-// ─── Index helpers ────────────────────────────────────────────────────────────
 
 fn to_ref(stmt: &PeriodBillingStatement) -> BillingStatementRef {
     BillingStatementRef {
@@ -45,38 +29,24 @@ fn contains_ref(items: &Vec<BillingStatementRef>, target: &BillingStatementRef) 
     false
 }
 
-// ─── Core write ──────────────────────────────────────────────────────────────
-
-/// Persist `stmt` and update both secondary indices.
-///
-/// Idempotent: re-calling with the same `(subscription_id, period_index)` pair
-/// overwrites the primary record but does not create duplicate index entries.
-/// Emits a `bill_stmt` event on every call so indexers can detect updates.
+/// Persist `stmt` and maintain both secondary indices. Idempotent.
 pub fn upsert_statement(env: &Env, stmt: PeriodBillingStatement) {
     let key = DataKey::BillingStatement(stmt.subscription_id, stmt.period_index);
     env.storage().instance().set(&key, &stmt);
 
     let stmt_ref = to_ref(&stmt);
 
-    // Subscription index
     let sub_key = DataKey::BillingStatementsBySubscription(stmt.subscription_id);
     let mut sub_refs: Vec<BillingStatementRef> = env
-        .storage()
-        .instance()
-        .get(&sub_key)
-        .unwrap_or(Vec::new(env));
+        .storage().instance().get(&sub_key).unwrap_or(Vec::new(env));
     if !contains_ref(&sub_refs, &stmt_ref) {
         sub_refs.push_back(stmt_ref.clone());
         env.storage().instance().set(&sub_key, &sub_refs);
     }
 
-    // Merchant index
     let merch_key = DataKey::BillingStatementsByMerchant(stmt.merchant.clone());
     let mut merch_refs: Vec<BillingStatementRef> = env
-        .storage()
-        .instance()
-        .get(&merch_key)
-        .unwrap_or(Vec::new(env));
+        .storage().instance().get(&merch_key).unwrap_or(Vec::new(env));
     if !contains_ref(&merch_refs, &stmt_ref) {
         merch_refs.push_back(stmt_ref);
         env.storage().instance().set(&merch_key, &merch_refs);
@@ -93,14 +63,7 @@ pub fn upsert_statement(env: &Env, stmt: PeriodBillingStatement) {
     );
 }
 
-// ─── Reads ────────────────────────────────────────────────────────────────────
-
-/// Fetch a single period statement. Returns `NotFound` if no record exists.
-pub fn get_statement(
-    env: &Env,
-    subscription_id: u32,
-    period_index: u32,
-) -> Result<PeriodBillingStatement, Error> {
+pub fn get_statement(env: &Env, subscription_id: u32, period_index: u32) -> Result<PeriodBillingStatement, Error> {
     env.storage()
         .instance()
         .get(&DataKey::BillingStatement(subscription_id, period_index))
@@ -116,36 +79,23 @@ pub fn get_statement(
 ///
 /// Returns an empty vec when `start` is out of range or `limit` is 0.
 pub fn list_statements_by_subscription(
-    env: &Env,
-    subscription_id: u32,
-    start: u32,
-    limit: u32,
+    env: &Env, subscription_id: u32, start: u32, limit: u32,
 ) -> Vec<PeriodBillingStatement> {
-    if limit == 0 {
-        return Vec::new(env);
-    }
+    if limit == 0 { return Vec::new(env); }
     let refs: Vec<BillingStatementRef> = env
-        .storage()
-        .instance()
+        .storage().instance()
         .get(&DataKey::BillingStatementsBySubscription(subscription_id))
         .unwrap_or(Vec::new(env));
-    if start >= refs.len() {
-        return Vec::new(env);
-    }
+    if start >= refs.len() { return Vec::new(env); }
     let end = (start + limit).min(refs.len());
     let mut out = Vec::new(env);
     let mut i = start;
     while i < end {
         let r = refs.get(i).unwrap();
-        if let Some(stmt) = env
-            .storage()
-            .instance()
-            .get::<_, PeriodBillingStatement>(&DataKey::BillingStatement(
-                r.subscription_id,
-                r.period_index,
-            ))
+        if let Some(s) = env.storage().instance()
+            .get::<_, PeriodBillingStatement>(&DataKey::BillingStatement(r.subscription_id, r.period_index))
         {
-            out.push_back(stmt);
+            out.push_back(s);
         }
         i += 1;
     }
@@ -158,23 +108,14 @@ pub fn list_statements_by_subscription(
 /// `start` is an offset into the filtered result set (for pagination across
 /// multiple calls with the same time range).
 pub fn list_statements_by_merchant_time_range(
-    env: &Env,
-    merchant: Address,
-    start_timestamp: u64,
-    end_timestamp: u64,
-    start: u32,
-    limit: u32,
+    env: &Env, merchant: Address, start_timestamp: u64, end_timestamp: u64, start: u32, limit: u32,
 ) -> Vec<PeriodBillingStatement> {
-    if limit == 0 {
-        return Vec::new(env);
-    }
+    if limit == 0 { return Vec::new(env); }
     let refs: Vec<BillingStatementRef> = env
-        .storage()
-        .instance()
+        .storage().instance()
         .get(&DataKey::BillingStatementsByMerchant(merchant))
         .unwrap_or(Vec::new(env));
 
-    // Filter by time range
     let mut filtered: Vec<BillingStatementRef> = Vec::new(env);
     let mut i = 0;
     while i < refs.len() {
@@ -184,33 +125,22 @@ pub fn list_statements_by_merchant_time_range(
         }
         i += 1;
     }
-
-    if start >= filtered.len() {
-        return Vec::new(env);
-    }
+    if start >= filtered.len() { return Vec::new(env); }
     let end = (start + limit).min(filtered.len());
     let mut out = Vec::new(env);
     let mut j = start;
     while j < end {
         let r = filtered.get(j).unwrap();
-        if let Some(stmt) = env
-            .storage()
-            .instance()
-            .get::<_, PeriodBillingStatement>(&DataKey::BillingStatement(
-                r.subscription_id,
-                r.period_index,
-            ))
+        if let Some(s) = env.storage().instance()
+            .get::<_, PeriodBillingStatement>(&DataKey::BillingStatement(r.subscription_id, r.period_index))
         {
-            out.push_back(stmt);
+            out.push_back(s);
         }
         j += 1;
     }
     out
 }
 
-// ─── Builder ─────────────────────────────────────────────────────────────────
-
-/// Input DTO for constructing a [`PeriodBillingStatement`].
 pub struct PeriodStatementInput {
     pub subscription_id: u32,
     pub period_index: u32,
@@ -229,17 +159,9 @@ pub struct PeriodStatementInput {
     pub finalized_at: u64,
 }
 
-/// Build a [`PeriodBillingStatement`] from `input`, resolving the contract
-/// token address from instance storage.
-///
-/// Returns `NotInitialized` if the contract has not been initialised yet.
-pub fn build_period_statement(
-    env: &Env,
-    input: PeriodStatementInput,
-) -> Result<PeriodBillingStatement, Error> {
+pub fn build_period_statement(env: &Env, input: PeriodStatementInput) -> Result<PeriodBillingStatement, Error> {
     let token: Address = env
-        .storage()
-        .instance()
+        .storage().instance()
         .get(&soroban_sdk::Symbol::new(env, "token"))
         .ok_or(Error::NotInitialized)?;
 

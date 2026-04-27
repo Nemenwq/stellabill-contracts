@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::{Error, SubscriptionVault, SubscriptionVaultClient};
+use crate::{Error, SubscriptionVault, SubscriptionVaultClient, UsageChargeResult};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String,
@@ -183,7 +183,7 @@ fn test_burst_usage_attempts() {
         &1_000_000i128,
         &String::from_str(&env, "ref2"),
     );
-    assert_eq!(result, Err(Ok(Error::BurstLimitExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::BurstLimitExceeded)));
 
     // 1 second later -> still fails
     env.ledger().set_timestamp(T0 + 1);
@@ -192,7 +192,7 @@ fn test_burst_usage_attempts() {
         &1_000_000i128,
         &String::from_str(&env, "ref3"),
     );
-    assert_eq!(result, Err(Ok(Error::BurstLimitExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::BurstLimitExceeded)));
 
     // 2 seconds later -> succeeds
     env.ledger().set_timestamp(T0 + 2);
@@ -236,7 +236,7 @@ fn test_rate_limit_violations() {
         &1_000_000i128,
         &String::from_str(&env, "ref4"),
     );
-    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::RateLimitExceeded)));
 
     // Move time forward past window
     env.ledger().set_timestamp(T0 + 60);
@@ -275,7 +275,7 @@ fn test_replay_attacks() {
         &1_000_000i128,
         &String::from_str(&env, "my-unique-ref"),
     );
-    assert_eq!(result, Err(Ok(Error::Replay)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::Replay)));
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn test_usage_cap_enforcement() {
         &5_000_000i128,
         &String::from_str(&env, "ref2"),
     );
-    assert_eq!(result, Err(Ok(Error::UsageCapExceeded)));
+    assert_eq!(result, Ok(Ok(UsageChargeResult::UsageCapExceeded)));
 
     // Another 4m is perfectly fine
     client.charge_usage_with_reference(&sub_id, &4_000_000i128, &String::from_str(&env, "ref3"));
@@ -321,4 +321,83 @@ fn test_usage_cap_enforcement() {
     // Moving to next period resets the cap
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
     client.charge_usage_with_reference(&sub_id, &6_000_000i128, &String::from_str(&env, "ref4"));
+}
+
+#[test]
+fn test_mixed_subscriptions() {
+    let (env, client, token, _) = setup();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&subscriber, &200_000_000i128);
+
+    // Create interval-based subscription
+    let interval_sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+        &None,
+    );
+    client.deposit_funds(&interval_sub_id, &subscriber, &100_000_000i128);
+
+    // Create usage-based subscription
+    let usage_sub_id = client.create_subscription(
+        &subscriber,
+        &merchant,
+        &1_000_000i128,
+        &INTERVAL,
+        &true,
+        &None,
+        &None,
+    );
+    client.deposit_funds(&usage_sub_id, &subscriber, &100_000_000i128);
+
+    // Charge usage on usage sub should succeed
+    client.charge_usage_with_reference(
+        &usage_sub_id,
+        &5_000_000i128,
+        &String::from_str(&env, "usage1"),
+    );
+    let u_sub = client.get_subscription(&usage_sub_id);
+    assert_eq!(u_sub.prepaid_balance, 95_000_000i128);
+
+    // Charge usage on interval sub should fail
+    let result = client.try_charge_usage_with_reference(
+        &interval_sub_id,
+        &5_000_000i128,
+        &String::from_str(&env, "usage2"),
+    );
+    assert_eq!(result, Err(Ok(Error::UsageNotEnabled)));
+}
+
+#[test]
+fn test_update_plan_template_usage_immutability() {
+    let (env, client, token, _) = setup();
+    let merchant = Address::generate(&env);
+
+    let plan_id = client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None);
+
+    // Updating to change amount is fine
+    let new_plan_id = client.update_plan_template(
+        &merchant,
+        &plan_id,
+        &2_000_000i128,
+        &INTERVAL,
+        &false,
+        &None,
+    );
+    assert!(new_plan_id > 0);
+
+    // Updating to change usage_enabled should fail with CannotChangeUsageMode
+    let err_result = client.try_update_plan_template(
+        &merchant,
+        &plan_id,
+        &2_000_000i128,
+        &INTERVAL,
+        &true,
+        &None,
+    );
+    assert_eq!(err_result, Err(Ok(Error::CannotChangeUsageMode)));
 }

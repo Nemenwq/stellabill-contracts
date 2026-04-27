@@ -437,6 +437,7 @@ pub fn merchant_refund(
             subscriber: subscriber.clone(),
             token: token_addr.clone(),
             amount,
+            timestamp: env.ledger().timestamp(),
         },
     );
 

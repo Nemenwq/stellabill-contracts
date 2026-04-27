@@ -3,12 +3,12 @@
 use crate::{
     queries::{MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE},
     subscription::MAX_WRITE_PATH_SCAN_DEPTH,
-    types::{DataKey, Subscription, SubscriptionStatus},
-    SubscriptionVault, SubscriptionVaultClient, Error,
+    types::{Subscription, SubscriptionStatus},
+    SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env, Symbol, Vec, String,
+    Address, Env, Symbol,
 };
 
 const T0: u64 = 1700000000;
@@ -97,7 +97,7 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     env.mock_all_auths();
     env.ledger().set_timestamp(T0);
     // Needed to avoid gas limits when doing deep mock pagination in tests
-    env.budget().reset_unlimited();
+    env.cost_estimate().budget().reset_unlimited();
 
     let contract_id = env.register(SubscriptionVault, ());
     let client = SubscriptionVaultClient::new(&env, &contract_id);
