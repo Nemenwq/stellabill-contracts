@@ -155,12 +155,13 @@ fn collect_batch_result_codes(
     env: &Env,
     client: &SubscriptionVaultClient,
     ids: &[u32],
+    nonce: u64,
 ) -> alloc::vec::Vec<(bool, u32)> {
     let ids_vec = ids.iter().fold(Vec::<u32>::new(env), |mut acc, id| {
         acc.push_back(*id);
         acc
     });
-    let results = client.batch_charge(&ids_vec);
+    let results = client.batch_charge(&ids_vec, &nonce);
     results
         .iter()
         .map(|result| (result.success, result.error_code))
@@ -1499,7 +1500,7 @@ fn test_remove_from_blocklist_requires_admin_and_existing_entry() {
 fn test_rotate_admin() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     assert_eq!(test_env.client.get_admin(), new_admin);
 }
 
@@ -1572,7 +1573,7 @@ fn test_batch_charge() {
     });
 
     let ids = Vec::from_array(&env, [id1, 999u32, id2, id3, id4]);
-    let results = client.batch_charge(&ids);
+    let results = client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 5);
 
@@ -1605,7 +1606,7 @@ fn test_batch_charge_duplicate_ids() {
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
     let ids = Vec::from_array(&env, [id, id]);
-    let results = client.batch_charge(&ids);
+    let results = client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 2);
     // First should succeed
@@ -1694,7 +1695,7 @@ fn test_batch_charge_matches_single_charge_semantics_for_identical_inputs() {
     test_env_single.jump(INTERVAL + 1);
 
     let batch_results =
-        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &ids_batch);
+        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &ids_batch, 0);
     let single_results = collect_single_charge_result_codes(&test_env_single.client, &ids_single);
 
     assert_eq!(batch_results, single_results);
@@ -1828,7 +1829,7 @@ fn test_batch_charge_mixed_results_preserve_single_path_order_and_error_codes() 
     ];
 
     let batch_results =
-        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &ids_batch);
+        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &ids_batch, 0);
     let single_results = collect_single_charge_result_codes(&test_env_single.client, &ids_single);
 
     assert_eq!(batch_results, single_results);
@@ -1875,7 +1876,7 @@ fn test_batch_charge_basic() {
     test_env.env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     let ids = Vec::from_array(&test_env.env, [id1, id2]);
-    let results = test_env.client.batch_charge(&ids);
+    let results = test_env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 2);
     assert!(results.get(0).unwrap().success);
@@ -1901,7 +1902,7 @@ fn test_batch_charge_fails_unauthorized() {
     let ids = Vec::from_array(&env, [1]);
 
     // This will panic because no auth is provided for the admin
-    client.batch_charge(&ids);
+    client.batch_charge(&ids, &0u64);
 }
 
 #[test]
@@ -1924,7 +1925,7 @@ fn test_batch_charge_partial_success() {
     test_env.env.ledger().set_timestamp(T0 + INTERVAL + 1);
 
     let ids = Vec::from_array(&test_env.env, [id1, id2]);
-    let results = test_env.client.batch_charge(&ids);
+    let results = test_env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 2);
     assert!(results.get(0).unwrap().success);
@@ -2025,7 +2026,7 @@ fn test_batch_charge_failed_items_match_single_path_without_cross_item_side_effe
     let ids_single = [ok_one_single, failing_single, ok_two_single];
 
     let batch_results =
-        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &ids_batch);
+        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &ids_batch, 0);
     let single_results = collect_single_charge_result_codes(&test_env_single.client, &ids_single);
 
     assert_eq!(batch_results, single_results);
@@ -2136,7 +2137,7 @@ fn test_batch_charge_high_volume_list_matches_single_path_semantics() {
     input_single.push(ids_single[7]);
 
     let batch_results =
-        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &input_batch);
+        collect_batch_result_codes(&test_env_batch.env, &test_env_batch.client, &input_batch, 0);
     let single_results = collect_single_charge_result_codes(&test_env_single.client, &input_single);
 
     assert_eq!(batch_results, single_results);
@@ -5035,7 +5036,7 @@ fn test_get_admin_returns_init_admin() {
 fn test_rotate_admin_successful() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     assert_eq!(test_env.client.get_admin(), new_admin);
 }
 
@@ -5044,7 +5045,7 @@ fn test_rotate_admin_unauthorized() {
     let test_env = TestEnv::default();
     let stranger = Address::generate(&test_env.env);
     let new_admin = Address::generate(&test_env.env);
-    let result = test_env.client.try_rotate_admin(&stranger, &new_admin);
+    let result = test_env.client.try_rotate_admin(&stranger, &new_admin, &0u64);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
@@ -5053,7 +5054,7 @@ fn test_rotate_admin_to_same_address_rejected() {
     let test_env = TestEnv::default();
     let result = test_env
         .client
-        .try_rotate_admin(&test_env.admin, &test_env.admin);
+        .try_rotate_admin(&test_env.admin, &test_env.admin, &0u64);
     assert_eq!(result, Err(Ok(Error::SelfRotation)));
 }
 
@@ -5062,7 +5063,7 @@ fn test_rotate_admin_to_contract_address_rejected() {
     let test_env = TestEnv::default();
     let result = test_env
         .client
-        .try_rotate_admin(&test_env.admin, &test_env.client.address);
+        .try_rotate_admin(&test_env.admin, &test_env.client.address, &0u64);
     assert_eq!(result, Err(Ok(Error::InvalidNewAdmin)));
 }
 
@@ -5072,7 +5073,7 @@ fn test_rotate_admin_to_contract_address_rejected() {
 fn test_old_admin_loses_access_after_rotation() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     // Old admin can no longer call set_min_topup.
     let result = test_env.client.try_set_min_topup(&test_env.admin, &2_000_000i128);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
@@ -5082,7 +5083,7 @@ fn test_old_admin_loses_access_after_rotation() {
 fn test_new_admin_gains_access_after_rotation() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     // New admin can immediately call set_min_topup.
     test_env.client.set_min_topup(&new_admin, &2_000_000i128);
     assert_eq!(test_env.client.get_min_topup(), 2_000_000i128);
@@ -5101,7 +5102,7 @@ fn test_set_min_topup_unauthorized_after_rotation() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
     let stranger = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &2_000_000i128),
         Err(Ok(Error::Unauthorized))
@@ -5133,7 +5134,7 @@ fn test_recover_stranded_funds_unauthorized_after_rotation() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
     let recipient = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     assert_eq!(
         test_env.client.try_recover_stranded_funds(
             &test_env.admin,
@@ -5171,7 +5172,7 @@ fn test_admin_rotation_affects_recovery_operations() {
         &RecoveryReason::AccidentalTransfer,
     );
 
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     // Old admin blocked after rotation.
     assert_eq!(
@@ -5207,7 +5208,7 @@ fn test_all_admin_operations_after_rotation() {
         .stellar_token_client()
         .mint(&test_env.client.address, &1_000_000i128);
 
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     test_env.client.set_min_topup(&new_admin, &3_000_000i128);
     test_env.stellar_token_client().mint(&test_env.client.address, &2_000_000);
@@ -5219,7 +5220,7 @@ fn test_all_admin_operations_after_rotation() {
         &String::from_str(&test_env.env, "rec_2"),
         &RecoveryReason::AccidentalTransfer,
     );
-    test_env.client.rotate_admin(&new_admin, &next_admin);
+    test_env.client.rotate_admin(&new_admin, &next_admin, &0u64);
     assert_eq!(test_env.client.get_admin(), next_admin);
 }
 
@@ -5230,9 +5231,9 @@ fn test_multiple_admin_rotations() {
     let admin_c = Address::generate(&test_env.env);
     let admin_d = Address::generate(&test_env.env);
 
-    test_env.client.rotate_admin(&test_env.admin, &admin_b);
-    test_env.client.rotate_admin(&admin_b, &admin_c);
-    test_env.client.rotate_admin(&admin_c, &admin_d);
+    test_env.client.rotate_admin(&test_env.admin, &admin_b, &0u64);
+    test_env.client.rotate_admin(&admin_b, &admin_c, &0u64);
+    test_env.client.rotate_admin(&admin_c, &admin_d, &0u64);
 
     assert_eq!(test_env.client.get_admin(), admin_d);
 
@@ -5251,10 +5252,10 @@ fn test_admin_cannot_be_rotated_by_previous_admin() {
     let admin2 = Address::generate(&test_env.env);
     let admin3 = Address::generate(&test_env.env);
 
-    test_env.client.rotate_admin(&test_env.admin, &admin2);
+    test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
 
     // admin1 cannot rotate again.
-    let result = test_env.client.try_rotate_admin(&test_env.admin, &admin3);
+    let result = test_env.client.try_rotate_admin(&test_env.admin, &admin3, &1u64);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
     assert_eq!(test_env.client.get_admin(), admin2);
 }
@@ -5278,7 +5279,7 @@ fn test_admin_rotation_does_not_affect_subscriptions() {
     let before = test_env.client.get_subscription(&id);
 
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     let after = test_env.client.get_subscription(&id);
     assert_eq!(before.subscriber, after.subscriber);
@@ -5300,7 +5301,7 @@ fn test_admin_rotation_with_subscriptions_active() {
     );
 
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     // Subscription state preserved.
     assert_eq!(
@@ -5344,7 +5345,7 @@ fn test_admin_rotation_access_control_comprehensive() {
     );
 
     // Phase 2: rotate to admin2.
-    test_env.client.rotate_admin(&test_env.admin, &admin2);
+    test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
     test_env.client.set_min_topup(&admin2, &2_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
@@ -5356,7 +5357,7 @@ fn test_admin_rotation_access_control_comprehensive() {
     );
 
     // Phase 3: rotate to admin3.
-    test_env.client.rotate_admin(&admin2, &admin3);
+    test_env.client.rotate_admin(&admin2, &admin3, &0u64);
     test_env.client.set_min_topup(&admin3, &3_000_000i128);
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &1_000_000i128),
@@ -5398,7 +5399,7 @@ fn test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoint
     assert_eq!(
         test_env
             .client
-            .try_rotate_admin(&stranger, &Address::generate(&test_env.env)),
+            .try_rotate_admin(&stranger, &Address::generate(&test_env.env), &0u64),
         Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
@@ -5497,7 +5498,7 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
         .client
         .add_to_blocklist(&test_env.admin, &blocklisted_subscriber, &None::<String>);
     test_env.client.enable_emergency_stop(&test_env.admin);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     assert_eq!(
         test_env.client.try_set_min_topup(&test_env.admin, &2_000_000i128),
@@ -5506,7 +5507,7 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
     assert_eq!(
         test_env
             .client
-            .try_rotate_admin(&test_env.admin, &Address::generate(&test_env.env)),
+            .try_rotate_admin(&test_env.admin, &Address::generate(&test_env.env), &1u64),
         Err(Ok(Error::Unauthorized))
     );
     assert_eq!(
@@ -5604,11 +5605,11 @@ fn test_get_admin_before_and_after_rotation() {
     assert_eq!(test_env.client.get_admin(), test_env.admin);
 
     let admin2 = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &admin2);
+    test_env.client.rotate_admin(&test_env.admin, &admin2, &0u64);
     assert_eq!(test_env.client.get_admin(), admin2);
 
     let admin3 = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&admin2, &admin3);
+    test_env.client.rotate_admin(&admin2, &admin3, &0u64);
     assert_eq!(test_env.client.get_admin(), admin3);
 }
 
@@ -5616,7 +5617,7 @@ fn test_get_admin_before_and_after_rotation() {
 fn test_admin_rotation_event_emission() {
     let test_env = TestEnv::default();
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     // Verify at least one event was emitted during the rotation call.
     // The Soroban test harness records all events; we just confirm the list is non-empty.
@@ -5644,11 +5645,11 @@ fn test_batch_charge_uses_stored_admin_after_rotation() {
         .with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
 
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     // After rotation the stored admin is new_admin; batch_charge should succeed.
     let ids = Vec::from_array(&test_env.env, [id]);
-    let results = test_env.client.batch_charge(&ids);
+    let results = test_env.client.batch_charge(&ids, &0u64);
     assert_eq!(results.len(), 1);
     assert!(results.get(0).unwrap().success);
     // Confirm new admin is stored.
@@ -5669,10 +5670,10 @@ fn test_batch_charge_allowed_for_new_admin_after_rotation() {
         .with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
 
     let new_admin = Address::generate(&test_env.env);
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
 
     let ids = Vec::from_array(&test_env.env, [id]);
-    let results = test_env.client.batch_charge(&ids);
+    let results = test_env.client.batch_charge(&ids, &0u64);
     assert_eq!(results.len(), 1);
     assert!(results.get(0).unwrap().success);
 }
@@ -5687,7 +5688,7 @@ fn test_rotate_admin_allowed_during_emergency_stop() {
 
     let new_admin = Address::generate(&test_env.env);
     // rotate_admin itself is not gated by emergency stop.
-    test_env.client.rotate_admin(&test_env.admin, &new_admin);
+    test_env.client.rotate_admin(&test_env.admin, &new_admin, &0u64);
     assert_eq!(test_env.client.get_admin(), new_admin);
 
     // New admin can disable the emergency stop.

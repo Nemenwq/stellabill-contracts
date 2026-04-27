@@ -193,8 +193,13 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
 pub fn do_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
+    nonce: u64,
 ) -> Result<Vec<BatchChargeResult>, Error> {
-    let _admin = require_stored_admin_auth(env)?;
+    let admin = require_stored_admin_auth(env)?;
+
+    // Nonce check must run before any state mutation to prevent replay.
+    // Domain DOMAIN_BATCH_CHARGE separates this counter from other admin ops.
+    crate::nonce::check_and_advance(env, &admin, crate::nonce::DOMAIN_BATCH_CHARGE, nonce)?;
 
     let now = env.ledger().timestamp();
     let mut results = Vec::new(env);
@@ -254,8 +259,11 @@ pub fn do_get_admin(env: &Env) -> Result<Address, Error> {
         .ok_or(Error::NotInitialized)
 }
 
-pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
+pub fn do_rotate_admin(env: &Env, current_admin: Address, new_admin: Address, nonce: u64) -> Result<(), Error> {
     require_admin_auth(env, &current_admin)?;
+
+    // Consume nonce for this domain before any other state mutation.
+    crate::nonce::check_and_advance(env, &current_admin, crate::nonce::DOMAIN_ADMIN_ROTATION, nonce)?;
 
     // Disallow self-rotation: rotating to the same address is a no-op that
     // could mask misconfiguration and wastes a transaction.

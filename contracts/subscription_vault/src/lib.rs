@@ -79,6 +79,7 @@ mod charge_core;
 mod merchant;
 mod metadata;
 pub mod migration;
+mod nonce;
 mod oracle;
 mod queries;
 mod reentrancy;
@@ -282,14 +283,38 @@ impl SubscriptionVault {
         admin::do_get_admin(&env)
     }
 
+    /// Return the current (next-expected) nonce for a `(signer, domain)` pair.
+    ///
+    /// Off-chain callers must read this value and pass it unchanged to the
+    /// next privileged call that requires a nonce. Valid domain constants:
+    ///
+    /// * `0` — `DOMAIN_BATCH_CHARGE` (used by [`batch_charge`](Self::batch_charge))
+    /// * `1` — `DOMAIN_ADMIN_ROTATION` (used by [`rotate_admin`](Self::rotate_admin))
+    ///
+    /// Returns `0` when no nonce has been consumed yet for this combination.
+    ///
+    /// # Auth
+    ///
+    /// Read-only; no auth required.
+    pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
+        nonce::get_nonce(&env, &signer, domain)
+    }
+
     // Updates the admin address.
     ///
     /// This change happens immediately, so make sure the new address is correct.
     ///
+    /// # Arguments
+    ///
+    /// * `nonce` — Must equal the current stored nonce for
+    ///   `(current_admin, DOMAIN_ADMIN_ROTATION)`. Prevents replay of a
+    ///   captured rotate-admin transaction.
+    ///
     /// # Errors
     /// - `Unauthorized` if caller is not current admin
-    pub fn rotate_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
-        admin::do_rotate_admin(&env, current_admin, new_admin)
+    /// - `NonceAlreadyUsed` if the provided nonce does not match the expected value
+    pub fn rotate_admin(env: Env, current_admin: Address, new_admin: Address, nonce: u64) -> Result<(), Error> {
+        admin::do_rotate_admin(&env, current_admin, new_admin, nonce)
     }
 
     /// Configure oracle pricing parameters. Admin only.
@@ -332,12 +357,26 @@ impl SubscriptionVault {
     ///
     /// Returns a per-subscription result vector so callers can identify
     /// which charges succeeded and which failed (with error codes).
+    ///
+    /// # Arguments
+    ///
+    /// * `subscription_ids` — IDs to charge.
+    /// * `nonce` — Must equal the current stored nonce for
+    ///   `(admin, DOMAIN_BATCH_CHARGE)`. Prevents replay of a captured
+    ///   batch-charge transaction. Read the current value with
+    ///   [`get_admin_nonce`](Self::get_admin_nonce) before calling.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EmergencyStopActive`] — Emergency stop is active.
+    /// * [`Error::NonceAlreadyUsed`] — Provided nonce does not match expected.
     pub fn batch_charge(
         env: Env,
         subscription_ids: Vec<u32>,
+        nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
         require_not_emergency_stop(&env)?;
-        admin::do_batch_charge(&env, &subscription_ids)
+        admin::do_batch_charge(&env, &subscription_ids, nonce)
     }
 
     // ── Emergency Stop ────────────────────────────────────────────────────────

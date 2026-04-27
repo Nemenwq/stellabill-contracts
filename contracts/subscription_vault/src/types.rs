@@ -413,6 +413,23 @@ impl Error {
     }
 }
 
+/// Event emitted when an admin nonce is consumed by a privileged operation.
+///
+/// Allows off-chain indexers to track the nonce sequence for each signer/domain
+/// pair and detect anomalies such as gaps or unexpected resets.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct NonceConsumedEvent {
+    /// The admin address that consumed the nonce.
+    pub signer: Address,
+    /// Domain tag identifying the operation class (see `nonce::DOMAIN_*` constants).
+    pub domain: u32,
+    /// The nonce value that was consumed.
+    pub nonce: u64,
+    /// Ledger timestamp when the nonce was consumed.
+    pub timestamp: u64,
+}
+
 /// Result of charging one subscription in a batch.
 #[contracttype]
 #[derive(Clone, Debug)]

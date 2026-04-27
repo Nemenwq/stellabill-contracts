@@ -176,7 +176,7 @@ fn test_emergency_stop_blocks_batch_charge() {
 
     client.enable_emergency_stop(&admin);
     let ids = Vec::from_array(&env, [sub_id]);
-    client.batch_charge(&ids);
+    client.batch_charge(&ids, &0u64);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
     client.disable_emergency_stop(&admin);
 
     let ids = Vec::from_array(&env, [sub_id]);
-    let results = client.batch_charge(&ids);
+    let results = client.batch_charge(&ids, &0u64);
     assert_eq!(results.len(), 1);
     assert!(results.get(0).unwrap().success);
 }
