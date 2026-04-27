@@ -1,5 +1,10 @@
 # Billing statement retention and compaction
 
+This document covers retention and compaction for the **per-charge audit log**
+(`statements.rs`).  Period billing statements (`billing_statements.rs`,
+`PeriodBillingStatement`) are stored separately and are **not** affected by
+compaction — see `docs/billing_statements.md`.
+
 This contract supports bounded billing-statement growth using configurable retention and explicit compaction.
 
 ## Retention model

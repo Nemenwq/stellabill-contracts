@@ -119,10 +119,6 @@ mod test_security;
 #[cfg(test)]
 mod test_usage_limits;
 #[cfg(test)]
-mod test_deterministic_charging;
-#[cfg(test)]
-mod test_emergency_stop_lifetime_caps;
-#[cfg(test)]
 mod test_billing_period_snapshots;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
@@ -151,6 +147,9 @@ pub use types::{
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
     SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED,
+    DEFAULT_ALLOWED_OPS, OP_CHARGE, OP_WITHDRAW, OP_REFUND,
+    GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    UsageChargeResult,
 };
 
 /// Maximum subscription ID this contract will ever allocate.

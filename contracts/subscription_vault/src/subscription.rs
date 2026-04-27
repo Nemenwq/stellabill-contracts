@@ -46,9 +46,9 @@ use crate::types::{
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionStatus, UsageLimits,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
+    SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent,
+    SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -437,6 +437,7 @@ pub fn do_create_subscription_with_token(
             interval_seconds,
             lifetime_cap,
             expires_at,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -463,7 +464,13 @@ pub fn do_deposit_funds(
     if subscriber != sub.subscriber {
         return Err(Error::Unauthorized);
     }
-    
+
+    // Block deposits to subscriptions whose merchant is paused — paused
+    // merchants must not accumulate new subscriber funds.
+    if crate::merchant::get_merchant_paused(env, sub.merchant.clone()) {
+        return Err(Error::MerchantPaused);
+    }
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {
@@ -1323,7 +1330,7 @@ pub fn do_create_subscription_from_plan(
     env.storage().instance().set(&merchant_key, &ids);
 
     // Maintain token -> subscription-ID index
-    let token_key = DataKey::TokenSubs(plan.token);
+    let token_key = DataKey::TokenSubs(plan.token.clone());
     let mut token_ids: Vec<u32> = env
         .storage()
         .instance()

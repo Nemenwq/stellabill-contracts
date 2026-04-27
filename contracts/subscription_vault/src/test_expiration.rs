@@ -122,7 +122,7 @@ fn test_cleanup_and_archival() {
     assert_eq!(sub_archived.amount, amount);
 
     // Archival reads - can still read it
-    assert_eq!(sub_archived.amount, 100);
+    assert_eq!(sub_archived.amount, amount);
 
     // Ensure funds can be withdrawn (already done by cleanup_subscription in some impls,
     // or via explicit withdraw)
@@ -143,7 +143,7 @@ fn test_expiration_vs_cancellation() {
     let min_topup = 1_000_000i128;
     token_admin.mint(&subscriber, &(min_topup * 5));
 
-    let _expires_at = T0 + 2 * INTERVAL;
+    let expires_at = T0 + 2 * INTERVAL;
 
     // Scenario 1: Cancel before expiry
     let sub_id1 = client.create_subscription_with_token(
