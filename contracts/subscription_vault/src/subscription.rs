@@ -624,7 +624,6 @@ pub fn do_resume_subscription(
     if sub.status == SubscriptionStatus::Active {
         return Ok(());
     }
-
     if (sub.status == SubscriptionStatus::InsufficientBalance
         || sub.status == SubscriptionStatus::GracePeriod)
         && sub.prepaid_balance < sub.amount
@@ -632,6 +631,7 @@ pub fn do_resume_subscription(
         return Err(Error::InsufficientBalance);
     }
 
+    let previous_status = sub.status;
     sub.status = SubscriptionStatus::Active;
     env.storage().instance().set(&subscription_id, &sub);
 
@@ -640,6 +640,7 @@ pub fn do_resume_subscription(
         crate::types::SubscriptionResumedEvent {
             subscription_id,
             authorizer,
+            previous_status,
         },
     );
 
