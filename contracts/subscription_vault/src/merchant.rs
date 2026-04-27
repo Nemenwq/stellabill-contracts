@@ -175,6 +175,24 @@ pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfi
     env.storage().instance().get(&key)
 }
 
+/// Updates merchant configuration. Returns the updated config.
+///
+/// Note: This is a stub implementation. Full implementation pending.
+pub fn update_merchant_config(
+    _env: &Env,
+    _merchant: Address,
+    _new_payout_address: Option<Address>,
+    _new_fee_bips: Option<i32>,
+    _new_allowed_operations: Option<i32>,
+    _new_is_active: Option<bool>,
+    _new_fee_address: Option<Option<Address>>,
+    _new_redirect_url: Option<soroban_sdk::String>,
+    _new_is_paused: Option<bool>,
+) -> Result<MerchantConfig, crate::types::Error> {
+    // TODO: Implement full merchant config update logic
+    Err(crate::types::Error::NotInitialized)
+}
+
 fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
     DataKey::MerchantBalance(merchant.clone(), token.clone())
 }

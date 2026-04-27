@@ -281,6 +281,10 @@ pub enum Error {
     MetadataValueTooLong = 3006,
     /// Oracle returned a non-positive price.
     OraclePriceInvalid = 3007,
+    /// Cannot change usage mode after subscription creation.
+    CannotChangeUsageMode = 3008,
+    /// Invalid token decimals provided.
+    InvalidTokenDecimals = 3009,
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.
@@ -1190,16 +1194,6 @@ pub struct MerchantRefundEvent {
 }
 
 /// Event emitted when a protocol fee is charged.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProtocolFeeConfiguredEvent {
-    pub admin: Address,
-    pub treasury: Address,
-    pub fee_bps: u32,
-    pub timestamp: u64,
-}
-
-/// Event emitted when protocol fees are configured.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeConfiguredEvent {
