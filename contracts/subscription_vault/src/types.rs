@@ -3,7 +3,7 @@
 //! Kept in a separate module to reduce merge conflicts when editing state machine
 //! or contract entrypoints.
 
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{ contracterror, contracttype, Address, String, Vec };
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -13,46 +13,116 @@ pub const MAX_METADATA_KEY_LENGTH: u32 = 32;
 pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 
 /// Storage keys for secondary indices.
+///
+/// ## Storage Layout — Discriminant Registry
+///
+/// The Soroban `#[contracttype]` macro serialises enum variants by their
+/// **declaration order** (0-indexed). The discriminant numbers in the doc
+/// comments below are the canonical, frozen identifiers for each key.
+/// **Never reorder or remove a variant** — doing so shifts all subsequent
+/// discriminants and silently corrupts live storage. Only append new variants
+/// at the end.
+///
+/// | Discriminant | Variant | Storage tier |
+/// |:---:|:---|:---|
+/// | 0 | `MerchantSubs(Address)` | instance |
+/// | 1 | `Token` | instance |
+/// | 2 | `Admin` | instance |
+/// | 3 | `MinTopup` | instance |
+/// | 4 | `NextId` | instance |
+/// | 5 | `SchemaVersion` | instance |
+/// | 6 | `Sub(u32)` | persistent |
+/// | 7 | `ChargedPeriod(u32)` | persistent |
+/// | 8 | `IdemKey(u32)` | persistent |
+/// | 9 | `EmergencyStop` | instance |
+/// | 10 | `MerchantPaused(Address)` | instance |
+/// | 11 | `BillingStatement(u32, u32)` | persistent |
+/// | 12 | `BillingStatementsBySubscription(u32)` | persistent |
+/// | 13 | `BillingStatementsByMerchant(Address)` | persistent |
+/// | 14 | `TotalAccounted(Address)` | instance |
+/// | 15 | `Recovery(String)` | persistent |
+/// | 16 | `MerchantConfig(Address)` | instance |
+/// | 17 | `MerchantEarnings(Address, Address)` | instance |
+/// | 18 | `MerchantTokens(Address)` | instance |
+/// | 19 | `UsageLimits(u32)` | instance |
+/// | 20 | `UsageState(u32)` | instance |
+/// | 21 | `GracePeriod` | instance |
+/// | 22 | `FeeBps` | instance |
+/// | 23 | `Treasury` | instance |
+/// | 24 | `AcceptedTokens` | instance |
+/// | 25 | `TokenDecimals(Address)` | instance |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    /// Maps a merchant address to its list of subscription IDs.
+    /// Maps a merchant address to its list of subscription IDs. Discriminant 0.
     MerchantSubs(Address),
     /// USDC token contract address. Discriminant 1.
-    Token,
+    Token = 1,
     /// Authorized admin address. Discriminant 2.
-    Admin,
+    Admin = 2,
     /// Minimum deposit threshold. Discriminant 3.
-    MinTopup,
+    MinTopup = 3,
     /// Auto-incrementing subscription ID counter. Discriminant 4.
-    NextId,
+    NextId = 4,
     /// On-chain storage schema version. Discriminant 5.
-    SchemaVersion,
+    SchemaVersion = 5,
     /// Subscription record keyed by its ID. Discriminant 6.
-    Sub(u32),
+    Sub(u32) = 6,
     /// Last charged billing-period index for replay protection. Discriminant 7.
-    ChargedPeriod(u32),
+    ChargedPeriod(u32) = 7,
     /// Idempotency key stored per subscription. Discriminant 8.
-    IdemKey(u32),
+    IdemKey(u32) = 8,
     /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
     EmergencyStop,
-    /// Merchant-wide pause flag.
+    /// Merchant-wide pause flag. Discriminant 10.
     MerchantPaused(Address),
+    /// Detailed billing statement for a subscription charge. Discriminant 11.
     BillingStatement(u32, u32),
+    /// Secondary index for statements by subscription. Discriminant 12.
     BillingStatementsBySubscription(u32),
+    /// Secondary index for statements by merchant. Discriminant 13.
     BillingStatementsByMerchant(Address),
+    /// Total accounted balance for recovery validation. Discriminant 14.
     TotalAccounted(Address),
+    /// Replay protection key for recovery operations. Discriminant 15.
     Recovery(String),
-    /// Merchant configuration (pause state, fee routing, etc.).
+    /// Merchant configuration (pause state, fee routing, etc.). Discriminant 16.
     MerchantConfig(Address),
-    /// Per-merchant, per-token accrued earnings record.
+    /// Per-merchant, per-token accrued earnings record. Discriminant 17.
     MerchantEarnings(Address, Address),
-    /// List of token addresses a merchant has earned in.
+    /// List of token addresses a merchant has earned in. Discriminant 18.
     MerchantTokens(Address),
-    /// Usage rate/cap limits for a subscription.
+    /// Usage rate/cap limits for a subscription. Discriminant 19.
     UsageLimits(u32),
-    /// Running usage state for a subscription within the current window.
+    /// Running usage state for a subscription within the current window. Discriminant 20.
     UsageState(u32),
+    /// Global grace period for underfunded subscriptions. Discriminant 21.
+    GracePeriod,
+    /// Protocol fee in basis points (0-10,000). Discriminant 22.
+    FeeBps,
+    /// Treasury address for protocol fee collection. Discriminant 23.
+    Treasury,
+    /// List of all token addresses accepted by the vault. Discriminant 24.
+    AcceptedTokens,
+    /// Decimals for a specific accepted token. Discriminant 25.
+    TokenDecimals(Address),
+    /// Auto-incrementing plan-template ID counter. Discriminant 26.
+    NextPlanId,
+    /// Plan template record keyed by its plan ID. Discriminant 27.
+    Plan(u32),
+    /// Maps a subscription ID to its parent plan-template ID. Discriminant 28.
+    SubPlan(u32),
+    /// Max concurrent active subscriptions allowed for a plan. Discriminant 29.
+    PlanMaxActive(u32),
+    /// Per-subscriber, per-token credit limit. Discriminant 30.
+    CreditLimit(Address, Address),
+    /// Maps a token address to its list of subscription IDs. Discriminant 31.
+    TokenSubs(Address), // Test comment
+    /// Maps (merchant, token) to their accumulated balance. Discriminant 32.
+    MerchantBalance(Address, Address),
+    /// Maps a subscriber address to their blocklist status. Discriminant 33.
+    Blocklist(Address),
+    Oracle,
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -139,11 +209,7 @@ pub struct Subscription {
 
 impl Subscription {
     pub fn is_expired(&self, current_time: u64) -> bool {
-        if let Some(exp) = self.expires_at {
-            current_time >= exp
-        } else {
-            false
-        }
+        if let Some(exp) = self.expires_at { current_time >= exp } else { false }
     }
 }
 
@@ -174,154 +240,105 @@ impl InsufficientBalanceError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    // --- Auth Errors (401-403) ---
+    // --- Auth Errors (1000-1099) ---
     /// Caller does not have the required authorization.
-    Unauthorized = 401,
+    Unauthorized = 1001,
     /// Caller is authorized but does not have permission for this specific action.
-    Forbidden = 403,
-    /// Subscription has expired based on its expires_at timestamp.
-    SubscriptionExpired = 410,
-
-    // --- Not Found (404) ---
-    /// The requested resource was not found in storage.
-    NotFound = 404,
-
-    // --- Invalid Input (400, 402) ---
-    /// The requested state transition is not allowed by the state machine.
-    InvalidStatusTransition = 400,
-    /// The top-up amount is below the minimum required threshold.
-    BelowMinimumTopup = 402,
-
-    // --- Subscription limit (429) ---
-    /// The contract has allocated the maximum number of subscriptions.
-    SubscriptionLimitReached = 429,
-
-    // --- Business Logic Errors (1001-1018) ---
-    /// Charge interval has not elapsed since the last payment.
-    IntervalNotElapsed = 1001,
-    /// Subscription is not in an active state for this operation.
-    NotActive = 1002,
-    /// Insufficient balance in the subscription vault.
-    InsufficientBalance = 1003,
-    /// Usage charging is not enabled for this subscription.
-    UsageNotEnabled = 1004,
-    /// Insufficient prepaid balance for the requested usage charge.
-    InsufficientPrepaidBalance = 1005,
-    /// The provided amount is zero or negative.
-    InvalidAmount = 1006,
-    /// Charge already processed for this billing period (replay protection).
-    Replay = 1007,
-    /// Invalid recovery amount provided.
-    InvalidRecoveryAmount = 1008,
-    /// Emergency stop is active - critical operations are blocked.
-    EmergencyStopActive = 1009,
-    /// Operation would result in a negative balance or underflow.
-    Underflow = 1010,
-    /// Recovery operation not allowed for this reason or context.
-    RecoveryNotAllowed = 1011,
-    /// Combined balance would overflow i128.
-    Overflow = 1012,
-    /// The contract or requested configuration is not initialized.
-    NotInitialized = 1013,
-    /// The requested export limit exceeds the maximum allowed.
-    InvalidExportLimit = 1014,
-    /// Invalid input provided to a function.
-    InvalidInput = 1015,
-    /// Reentrancy detected - function called recursively during execution.
-    Reentrancy = 1016,
-    /// Lifetime charge cap has been reached; no further charges are allowed.
-    LifetimeCapReached = 1017,
-    /// Contract is already initialized; init may only be called once.
-    AlreadyInitialized = 1018,
-    /// Merchant-wide pause is active for this subscription.
-    MerchantPaused = 1019,
-
-    // --- Metadata Errors (1023-1025) ---
-    /// Metadata key limit reached for this subscription.
-    MetadataKeyLimitReached = 1023,
-    /// Metadata key exceeds maximum allowed length.
-    MetadataKeyTooLong = 1024,
-    /// Metadata value exceeds maximum allowed length.
-    MetadataValueTooLong = 1025,
-
-    // --- Blocklist (1026) ---
+    Forbidden = 1002,
     /// Subscriber is on the blocklist and cannot create or interact with subscriptions.
-    SubscriberBlocklisted = 1026,
-
-    // --- Oracle Errors (1027-1030) ---
-    /// Oracle pricing is enabled but no oracle is configured.
-    OracleNotConfigured = 1027,
-    /// Oracle returned an invalid or missing price payload.
-    OraclePriceUnavailable = 1028,
-    /// Oracle price is stale relative to configured max age.
-    OraclePriceStale = 1029,
-    /// Oracle returned a non-positive price.
-    OraclePriceInvalid = 1030,
-
-    // --- Subscription Plan / Credit (1031-1032) ---
-    /// Subscriber has reached the maximum allowed number of active
-    /// subscriptions for this plan.
-    MaxConcurrentSubscriptionsReached = 1031,
-    /// Subscriber's configured credit limit would be exceeded.
-    CreditLimitExceeded = 1032,
-    /// Usage rate limit exceeded for the current window.
-    RateLimitExceeded = 1033,
-    /// Usage charge would exceed the per-period cap.
-    UsageCapExceeded = 1034,
-    /// Usage charge attempted too soon after previous charge (burst protection).
-    BurstLimitExceeded = 1035,
+    SubscriberBlocklisted = 1003,
     /// Rotation to the same admin address is not allowed.
-    SelfRotation = 1036,
+    SelfRotation = 1004,
+
+    // --- Not Found (2000-2099) ---
+    /// The requested resource was not found in storage.
+    NotFound = 2001,
+    /// The contract or requested configuration is not initialized.
+    NotInitialized = 2002,
+
+    // --- Invalid Args (3000-3099) ---
+    /// The provided amount is zero or negative.
+    InvalidAmount = 3001,
+    /// Invalid input provided to a function.
+    InvalidInput = 3002,
+    /// Invalid recovery amount provided.
+    InvalidRecoveryAmount = 3003,
     /// The provided new admin address is invalid.
-    InvalidNewAdmin = 1037,
+    InvalidNewAdmin = 3004,
+    /// Metadata key exceeds maximum allowed length.
+    MetadataKeyTooLong = 3005,
+    /// Metadata value exceeds maximum allowed length.
+    MetadataValueTooLong = 3006,
+    /// Oracle returned a non-positive price.
+    OraclePriceInvalid = 3007,
+
+    // --- State Transition (4000-4099) ---
+    /// The requested state transition is not allowed by the state machine.
+    InvalidStatusTransition = 4001,
+    /// Subscription is not in an active state for this operation.
+    NotActive = 4002,
+    /// Subscription has expired based on its expires_at timestamp.
+    SubscriptionExpired = 4003,
+    /// Charge interval has not elapsed since the last payment.
+    IntervalNotElapsed = 4004,
+    /// Charge already processed for this billing period (replay protection).
+    Replay = 4005,
+    /// Recovery operation not allowed for this reason or context.
+    RecoveryNotAllowed = 4006,
+    /// Emergency stop is active - critical operations are blocked.
+    EmergencyStopActive = 4007,
+    /// Contract is already initialized; init may only be called once.
+    AlreadyInitialized = 4008,
+    /// Merchant-wide pause is active for this subscription.
+    MerchantPaused = 4009,
+    /// Reentrancy detected - function called recursively during execution.
+    Reentrancy = 4010,
+
+    // --- Accounting (5000-5099) ---
+    /// Insufficient balance in the subscription vault.
+    InsufficientBalance = 5001,
+    /// Insufficient prepaid balance for the requested usage charge.
+    InsufficientPrepaidBalance = 5002,
+    /// The top-up amount is below the minimum required threshold.
+    BelowMinimumTopup = 5003,
+    /// Operation would result in a negative balance or underflow.
+    Underflow = 5004,
+    /// Combined balance would overflow i128.
+    Overflow = 5005,
+    /// Oracle pricing is enabled but no oracle is configured.
+    OracleNotConfigured = 5006,
+    /// Oracle returned an invalid or missing price payload.
+    OraclePriceUnavailable = 5007,
+    /// Oracle price is stale relative to configured max age.
+    OraclePriceStale = 5008,
+
+    // --- Limits (6000-6099) ---
+    /// The contract has allocated the maximum number of subscriptions.
+    SubscriptionLimitReached = 6001,
+    /// Lifetime charge cap has been reached; no further charges are allowed.
+    LifetimeCapReached = 6002,
+    /// Usage charging is not enabled for this subscription.
+    UsageNotEnabled = 6003,
+    /// The requested export limit exceeds the maximum allowed.
+    InvalidExportLimit = 6004,
+    /// Metadata key limit reached for this subscription.
+    MetadataKeyLimitReached = 6005,
+    /// Subscriber has reached the maximum allowed number of active subscriptions for this plan.
+    MaxConcurrentSubscriptionsReached = 6006,
+    /// Subscriber's configured credit limit would be exceeded.
+    CreditLimitExceeded = 6007,
+    /// Usage rate limit exceeded for the current window.
+    RateLimitExceeded = 6008,
+    /// Usage charge would exceed the per-period cap.
+    UsageCapExceeded = 6009,
+    /// Usage charge attempted too soon after previous charge (burst protection).
+    BurstLimitExceeded = 6010,
 }
 
 impl Error {
     /// Returns the numeric code for this error (for batch result reporting).
     pub const fn to_code(self) -> u32 {
-        match self {
-            Error::NotFound => 404,
-            Error::Unauthorized => 401,
-            Error::Forbidden => 403,
-            Error::SubscriptionExpired => 410,
-            Error::IntervalNotElapsed => 1001,
-            Error::NotActive => 1002,
-            Error::InvalidStatusTransition => 400,
-            Error::BelowMinimumTopup => 402,
-            Error::Overflow => 1012,
-            Error::Underflow => 1010,
-            Error::InsufficientBalance => 1003,
-            Error::InvalidAmount => 1006,
-            Error::UsageNotEnabled => 1004,
-            Error::InsufficientPrepaidBalance => 1005,
-            Error::Replay => 1007,
-            Error::InvalidRecoveryAmount => 1008,
-            Error::EmergencyStopActive => 1009,
-            Error::RecoveryNotAllowed => 1011,
-            Error::InvalidInput => 1015,
-            Error::NotInitialized => 1013,
-            Error::InvalidExportLimit => 1014,
-            Error::Reentrancy => 1016,
-            Error::LifetimeCapReached => 1017,
-            Error::AlreadyInitialized => 1018,
-            Error::MerchantPaused => 1019,
-            Error::MetadataKeyLimitReached => 1023,
-            Error::MetadataKeyTooLong => 1024,
-            Error::MetadataValueTooLong => 1025,
-            Error::SubscriberBlocklisted => 1026,
-            Error::OracleNotConfigured => 1027,
-            Error::OraclePriceUnavailable => 1028,
-            Error::OraclePriceStale => 1029,
-            Error::OraclePriceInvalid => 1030,
-            Error::SubscriptionLimitReached => 429,
-            Error::MaxConcurrentSubscriptionsReached => 1031,
-            Error::CreditLimitExceeded => 1032,
-            Error::RateLimitExceeded => 1033,
-            Error::UsageCapExceeded => 1034,
-            Error::BurstLimitExceeded => 1035,
-            Error::SelfRotation => 1036,
-            Error::InvalidNewAdmin => 1037,
-        }
+        self as u32
     }
 }
 
@@ -416,6 +433,8 @@ pub struct PlanTemplate {
     pub template_key: u32,
     /// Monotonic version number within the template group (starts at 1).
     pub version: u32,
+    /// Whether this plan has been disabled from accepting new subscriptions.
+    pub is_disabled: bool,
 }
 
 /// Result of computing next charge information for a subscription.
@@ -426,6 +445,14 @@ pub struct NextChargeInfo {
     pub next_charge_timestamp: u64,
     /// Whether a charge is actually expected based on the subscription status.
     pub is_charge_expected: bool,
+    /// Current status of the subscription.
+    pub status: SubscriptionStatus,
+    /// Stable reason for the current charge state (e.g. symbol_short!("active"), symbol_short!("paused")).
+    pub reason: soroban_sdk::Symbol,
+    /// Next charge amount.
+    pub amount: i128,
+    /// Token address for the charge.
+    pub token: soroban_sdk::Address,
 }
 
 /// View of a subscription's lifetime cap status.
@@ -511,6 +538,38 @@ pub struct BillingCompactionSummary {
     pub pruned_count: u32,
     pub kept_count: u32,
     pub total_pruned_amount: i128,
+}
+
+/// Snapshot closed — no further mutations allowed.
+pub const SNAPSHOT_FLAG_CLOSED: u32 = 1 << 0;
+/// An interval charge was processed in this period.
+pub const SNAPSHOT_FLAG_INTERVAL_CHARGED: u32 = 1 << 1;
+/// At least one usage charge was processed in this period.
+pub const SNAPSHOT_FLAG_USAGE_CHARGED: u32 = 1 << 2;
+/// Period closed with no successful charges.
+pub const SNAPSHOT_FLAG_EMPTY: u32 = 1 << 3;
+
+/// Immutable per-period summary written after each successful interval charge.
+///
+/// Keyed by `(subscription_id, period_index)` where `period_index = timestamp / interval_seconds`.
+/// Once `SNAPSHOT_FLAG_CLOSED` is set, the record cannot be overwritten.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BillingPeriodSnapshot {
+    pub subscription_id: u32,
+    pub period_index: u64,
+    /// Ledger timestamp of the start of this billing period.
+    pub period_start: u64,
+    /// Ledger timestamp of the end of this billing period (charge time).
+    pub period_end: u64,
+    /// Total amount charged (interval + any usage) in token base units.
+    pub total_charged: i128,
+    /// Total usage units debited in this period.
+    pub total_usage_units: i128,
+    /// Bitmask of SNAPSHOT_FLAG_* constants.
+    pub status_flags: u32,
+    /// Ledger timestamp when the snapshot was finalized.
+    pub finalized_at: u64,
 }
 
 /// Event emitted when statement compaction executes.
@@ -628,6 +687,28 @@ pub struct OraclePrice {
     pub timestamp: u64,
 }
 
+/// Event emitted when oracle configuration is updated by an admin.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleConfigUpdatedEvent {
+    pub enabled: bool,
+    pub oracle: Option<Address>,
+    pub max_age_seconds: u64,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a cross-currency charge resolves its amount via oracle.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleChargeResolvedEvent {
+    pub subscription_id: u32,
+    pub quote_amount: i128,
+    pub token_amount: i128,
+    pub price: i128,
+    pub price_timestamp: u64,
+    pub timestamp: u64,
+}
+
 /// Token registry entry.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -673,6 +754,8 @@ pub enum RecoveryReason {
     ExpiredEscrow = 2,
     /// System or logic correction.
     SystemCorrection = 3,
+    /// Accidental transfer of funds to the contract.
+    AccidentalTransfer = 4,
 }
 
 /// Event emitted when admin recovers stranded funds.
@@ -694,10 +777,12 @@ pub struct SubscriptionCreatedEvent {
     pub subscription_id: u32,
     pub subscriber: Address,
     pub merchant: Address,
+    pub token: Address,
     pub amount: i128,
     pub interval_seconds: u64,
     pub lifetime_cap: Option<i128>,
     pub expires_at: Option<u64>,
+    pub timestamp: u64,
 }
 
 /// Event emitted when funds are deposited into a subscription vault.
@@ -706,8 +791,12 @@ pub struct SubscriptionCreatedEvent {
 pub struct FundsDepositedEvent {
     pub subscription_id: u32,
     pub subscriber: Address,
+    /// Settlement token deposited.
+    pub token: Address,
     pub amount: i128,
-    pub prepaid_balance: i128,
+    /// Total prepaid balance after this deposit.
+    pub new_balance: i128,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription interval charge succeeds.
@@ -715,9 +804,17 @@ pub struct FundsDepositedEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionChargedEvent {
     pub subscription_id: u32,
+    pub subscriber: Address,
     pub merchant: Address,
+    /// Settlement token charged.
+    pub token: Address,
+    /// Amount charged in this interval (gross amount before fees).
     pub amount: i128,
+    /// Cumulative total charged over subscription lifetime.
     pub lifetime_charged: i128,
+    pub timestamp: u64,
+    pub period_start: u64,
+    pub period_end: u64,
 }
 
 /// Event emitted when an interval charge attempt cannot be completed due to
@@ -751,8 +848,13 @@ pub struct SubscriptionRecoveryReadyEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionCancelledEvent {
     pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
     pub authorizer: Address,
+    /// Remaining prepaid balance available for subscriber withdrawal.
     pub refund_amount: i128,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is paused.
@@ -760,7 +862,10 @@ pub struct SubscriptionCancelledEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionPausedEvent {
     pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
     pub authorizer: Address,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is resumed.
@@ -768,7 +873,10 @@ pub struct SubscriptionPausedEvent {
 #[derive(Clone, Debug)]
 pub struct SubscriptionResumedEvent {
     pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
     pub authorizer: Address,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscription is automatically expired.
@@ -794,7 +902,9 @@ pub struct MerchantWithdrawalEvent {
     pub merchant: Address,
     pub token: Address,
     pub amount: i128,
+    /// Merchant's accumulated balance remaining after withdrawal.
     pub remaining_balance: i128,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a subscriber withdraws funds after cancellation.
@@ -803,7 +913,9 @@ pub struct MerchantWithdrawalEvent {
 pub struct SubscriberWithdrawalEvent {
     pub subscription_id: u32,
     pub subscriber: Address,
+    pub token: Address,
     pub amount: i128,
+    pub timestamp: u64,
 }
 
 /// Event emitted when a merchant-initiated one-off charge is applied.
@@ -811,8 +923,13 @@ pub struct SubscriberWithdrawalEvent {
 #[derive(Clone, Debug)]
 pub struct OneOffChargedEvent {
     pub subscription_id: u32,
+    pub subscriber: Address,
     pub merchant: Address,
+    pub token: Address,
     pub amount: i128,
+    /// Prepaid balance remaining after this charge.
+    pub remaining_balance: i128,
+    pub timestamp: u64,
 }
 
 /// Event emitted when the lifetime charge cap is reached.
@@ -864,6 +981,18 @@ pub struct PlanTemplateUpdatedEvent {
     /// Merchant that owns this plan template.
     pub merchant: Address,
     /// Timestamp when the update occurred.
+    pub timestamp: u64,
+}
+
+/// Event emitted when a plan template is disabled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlanTemplateDisabledEvent {
+    /// The ID of the plan template that was disabled.
+    pub plan_template_id: u32,
+    /// Merchant that owns this plan template.
+    pub merchant: Address,
+    /// Timestamp when disabled.
     pub timestamp: u64,
 }
 
@@ -920,6 +1049,7 @@ pub struct UsageStatementEvent {
 pub enum ChargeExecutionResult {
     Charged = 0,
     InsufficientBalance = 1,
+    LifetimeCapReached = 2,
 }
 
 #[contracttype]
@@ -949,18 +1079,55 @@ pub struct PartialRefundEvent {
     pub subscription_id: u32,
     /// Subscriber who receives the refunded amount.
     pub subscriber: Address,
+    pub token: Address,
     /// Amount refunded in token base units.
     pub amount: i128,
     /// Ledger timestamp when the refund was processed.
     pub timestamp: u64,
 }
 
+/// Operation flags for merchant configuration.
+/// Each flag is a bit in the allowed_operations bitmap.
+pub const OP_CHARGE: i32 = 1 << 0; // 0x01 - Can charge subscribers
+pub const OP_WITHDRAW: i32 = 1 << 1; // 0x02 - Can withdraw earnings
+pub const OP_REFUND: i32 = 1 << 2; // 0x04 - Can issue refunds to subscribers
+pub const OP_BILLING_PAUSE: i32 = 1 << 3; // 0x08 - Can pause subscriptions globally
+pub const OP_AUTO_RENEWAL: i32 = 1 << 4; // 0x10 - Auto-renewal enabled
+
+/// Default allowed operations for a new merchant config.
+pub const DEFAULT_ALLOWED_OPS: i32 = OP_CHARGE | OP_WITHDRAW | OP_REFUND | OP_AUTO_RENEWAL;
+
+/// Maximum fee in bips (100% = 10000 bips).
+pub const MAX_FEE_BIPS: i32 = 10000;
+
+/// Validates that the allowed_operations bitmap contains only valid operation bits.
+pub fn is_valid_allowed_operations(ops: i32) -> bool {
+    let valid_mask = OP_CHARGE | OP_WITHDRAW | OP_REFUND | OP_BILLING_PAUSE | OP_AUTO_RENEWAL;
+    ops & !valid_mask == 0
+}
+
+/// Extended merchant configuration with payout settings and operational flags.
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub struct MerchantConfig {
+    /// Version for forward-compatible config upgrades.
+    pub version: i32,
+    /// Address where merchant receives payouts.
+    pub payout_address: Address,
+    /// Fee percentage in bips (0-10000, where 10000 = 100%).
+    pub fee_bips: i32,
+    /// Bitmap of allowed operations (see OP_* constants).
+    pub allowed_operations: i32,
+    /// Whether the merchant can receive charges and payouts.
+    pub is_active: bool,
+    /// Address for fee routing (optional).
     pub fee_address: Option<Address>,
-    pub redirect_url: String, // e.g., for off-chain success callbacks
-    pub is_paused: bool,      // Global pause for all merchant plans
+    /// Redirect URL for off-chain callbacks.
+    pub redirect_url: String,
+    /// Global pause for all merchant plans (legacy, prefer is_active).
+    pub is_paused: bool,
+    /// Timestamp of last config update.
+    pub last_updated: u64,
 }
 
 /// Event emitted when a merchant enables their blanket pause.
@@ -978,6 +1145,7 @@ pub struct MerchantUnpausedEvent {
     pub merchant: Address,
     pub timestamp: u64,
 }
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MerchantRefundEvent {
@@ -987,64 +1155,22 @@ pub struct MerchantRefundEvent {
     pub amount: i128,
 }
 
-/// Event emitted when protocol fees are charged during an interval charge.
-///
-/// Emitted only when a protocol fee percentage is configured and fees are routed
-/// to a Treasury account.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ProtocolFeeChargedEvent {
-    pub subscription_id: u32,
-    pub treasury: Address,
-    pub fee_amount: i128,
-    pub merchant_amount: i128,
-    pub timestamp: u64,
-}
-
-/// Event emitted when protocol fee configuration is updated.
+/// Event emitted when a protocol fee is charged.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
     pub fee_bps: u32,
-    pub treasury: Option<Address>,
     pub timestamp: u64,
 }
 
-/// Breakdown of a merchant's accrued earnings by charge kind.
+/// Event emitted when protocol fees are configured.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccruedTotals {
-    /// Total earned from interval charges.
-    pub interval: i128,
-    /// Total earned from usage charges.
-    pub usage: i128,
-    /// Total earned from one-off charges.
-    pub one_off: i128,
-}
-
-/// Accumulated earnings for a merchant for a single token.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenEarnings {
-    /// Accrued charge totals broken down by kind.
-    pub accruals: AccruedTotals,
-    /// Total amount withdrawn by the merchant.
-    pub withdrawals: i128,
-    /// Total amount refunded to subscribers.
-    pub refunds: i128,
-}
-
-/// A reconciliation snapshot for one token, returned by `get_reconciliation_snapshot`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TokenReconciliationSnapshot {
-    pub token: Address,
-    /// Sum of all charges accrued (interval + usage + one_off).
-    pub total_accruals: i128,
-    /// Sum of all withdrawals.
-    pub total_withdrawals: i128,
-    /// Sum of all subscriber refunds.
-    pub total_refunds: i128,
-    /// Computed balance = total_accruals - withdrawals - refunds.
-    pub computed_balance: i128,
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeConfiguredEvent {
+    pub admin: Address,
+    pub treasury: Address,
+    pub fee_bps: u32,
+    pub timestamp: u64,
 }

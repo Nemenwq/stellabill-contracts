@@ -50,14 +50,18 @@ pub fn validate_status_transition(
         SubscriptionStatus::Paused => {
             matches!(
                 to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
+                SubscriptionStatus::Active
+                    | SubscriptionStatus::Cancelled
+                    | SubscriptionStatus::Expired
             )
         }
         SubscriptionStatus::Cancelled => matches!(to, SubscriptionStatus::Archived),
         SubscriptionStatus::InsufficientBalance => {
             matches!(
                 to,
-                SubscriptionStatus::Active | SubscriptionStatus::Cancelled | SubscriptionStatus::Expired
+                SubscriptionStatus::Active
+                    | SubscriptionStatus::Cancelled
+                    | SubscriptionStatus::Expired
             )
         }
         SubscriptionStatus::GracePeriod => {

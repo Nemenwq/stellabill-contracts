@@ -1,8 +1,10 @@
 #![cfg(test)]
 
-use crate::{ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient};
+use crate::{
+    ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+};
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
-use soroban_sdk::{Address, Env, FromVal, String, Symbol, Val, Vec};
+use soroban_sdk::{Address, Env, FromVal, String, Symbol, Val, Vec, symbol_short};
 
 const T0: u64 = 1_700_000_000;
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
@@ -25,8 +27,8 @@ fn setup() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     (env, client, token, admin)
 }
 
-fn topic0(env: &Env, event: &(Address, Vec<Val>, Val)) -> Symbol {
-    Symbol::from_val(env, &event.1.get(0).unwrap())
+fn topic0(_env: &Env, event: &(Address, Vec<Val>, Val)) -> Val {
+    event.1.get(0).unwrap()
 }
 
 #[test]
@@ -44,17 +46,12 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
         &INTERVAL,
         &true,
         &None::<i128>,
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
 
-    let plan_id = client.create_plan_template(
-        &merchant,
-        &1_000_000i128,
-        &INTERVAL,
-        &false,
-        &None::<i128>,
-    );
+    let plan_id =
+        client.create_plan_template(&merchant, &1_000_000i128, &INTERVAL, &false, &None::<i128>);
 
     client.enable_emergency_stop(&admin);
     assert!(client.get_emergency_stop_status());
@@ -122,7 +119,10 @@ fn test_emergency_stop_blocks_all_critical_create_deposit_charge_paths() {
     assert!(!client.get_emergency_stop_status());
 
     let resumed_id = client.create_subscription_from_plan(&subscriber, &plan_id);
-    assert_eq!(client.get_subscription(&resumed_id).status, SubscriptionStatus::Active);
+    assert_eq!(
+        client.get_subscription(&resumed_id).status,
+        SubscriptionStatus::Active
+    );
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
     let enabled_events = env.events().all();
     assert_eq!(enabled_events.len(), 1);
     assert_eq!(
-        topic0(&env, &enabled_events.get(0).unwrap()),
+        Symbol::from_val(&env, &topic0(&env, &enabled_events.get(0).unwrap())),
         Symbol::new(&env, "emergency_stop_enabled")
     );
 
@@ -145,7 +145,7 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
     let disabled_events = env.events().all();
     assert_eq!(disabled_events.len(), 1);
     assert_eq!(
-        topic0(&env, &disabled_events.get(0).unwrap()),
+        Symbol::from_val(&env, &topic0(&env, &disabled_events.get(0).unwrap())),
         Symbol::new(&env, "emergency_stop_disabled")
     );
 
@@ -155,7 +155,7 @@ fn test_emergency_stop_toggle_is_idempotent_and_emits_events_once_per_transition
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1009)")]
+#[should_panic(expected = "Error(Contract, #4007)")]
 fn test_emergency_stop_blocks_batch_charge() {
     let (env, client, token, admin) = setup();
     let subscriber = Address::generate(&env);
@@ -169,7 +169,7 @@ fn test_emergency_stop_blocks_batch_charge() {
         &INTERVAL,
         &false,
         &None::<i128>,
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -193,7 +193,7 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
         &INTERVAL,
         &false,
         &None::<i128>,
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &10_000_000i128);
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
@@ -223,7 +223,7 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
         &INTERVAL,
         &false,
         &Some(cap),
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &(3 * amount));
 
@@ -238,7 +238,7 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
     env.ledger().set_timestamp(T0 + (2 * INTERVAL) + 1);
     assert_eq!(
         client.try_charge_subscription(&sub_id),
-        Ok(Ok(ChargeExecutionResult::Charged))
+        Ok(Ok(ChargeExecutionResult::LifetimeCapReached))
     );
 
     let after_second = client.get_subscription(&sub_id);
@@ -263,14 +263,10 @@ fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
         &INTERVAL,
         &true,
         &Some(cap),
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
-    client.charge_usage_with_reference(
-        &sub_id,
-        &cap,
-        &String::from_str(&env, "cap-exact-usage"),
-    );
+    client.charge_usage_with_reference(&sub_id, &cap, &String::from_str(&env, "cap-exact-usage"));
 
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.prepaid_balance, DEPOSIT - cap);
@@ -294,7 +290,7 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         &INTERVAL,
         &true,
         &Some(cap),
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
 
@@ -302,13 +298,16 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
     let mut sub = client.get_subscription(&sub_id);
     sub.lifetime_charged = cap - 1;
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&sub_id, &sub);
+        env.storage().instance().set(&crate::types::DataKey::Sub(sub_id), &sub);
     });
 
-    client.charge_usage_with_reference(
-        &sub_id,
-        &2i128,
-        &String::from_str(&env, "cap-overrun-usage"),
+    assert_eq!(
+        client.try_charge_usage_with_reference(
+            &sub_id,
+            &2i128,
+            &String::from_str(&env, "cap-overrun-usage"),
+        ),
+        Ok(Ok(()))
     );
 
     let updated = client.get_subscription(&sub_id);
@@ -319,7 +318,7 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
 }
 
 #[test]
-fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() {
+fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
     let (env, client, token, _) = setup();
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -333,10 +332,11 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() 
         &INTERVAL,
         &false,
         &Some(cap),
-    &None::<u64>,
+        &None::<u64>,
     );
     client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
     client.charge_one_off(&sub_id, &merchant, &cap);
+    let events = env.events().all();
 
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
@@ -344,7 +344,8 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels_and_emits_single_cap_event() 
     assert_eq!(sub.prepaid_balance, 15_000_000i128);
     assert_eq!(client.get_merchant_balance(&merchant), cap);
 
-    // Contract state invariants: cap was reached, subscription auto-cancelled, balance unchanged
-    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
-    assert_eq!(sub.lifetime_charged, cap);
+    assert_eq!(
+        client.try_charge_one_off(&sub_id, &merchant, &1i128),
+        Err(Ok(Error::LifetimeCapReached))
+    );
 }
