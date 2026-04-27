@@ -1664,3 +1664,117 @@ pub fn do_configure_usage_limits(
 
     Ok(())
 }
+
+// ── contracts/subscription_vault/src/subscription.rs ─────────────────────────
+// Add this function to the existing subscription module.
+// All imports (Error, Subscription, SubscriptionStatus, OneOffChargedEvent,
+// BillingChargeKind, statements::append_statement, merchant::credit_merchant,
+// queries::get_subscription, safe_math) are already present in the module.
+
+/// Merchant-initiated one-off charge against the subscription's prepaid balance.
+///
+/// # Authorization
+/// Only the subscription's registered merchant may call this function.
+/// The `merchant` address must `require_auth()`.
+///
+/// # Balance semantics
+/// Debits `amount` from `prepaid_balance` and credits the merchant's
+/// accumulated balance (same accounting path as `charge_subscription`).
+/// **Does not** touch `last_payment_timestamp` or interval logic.
+///
+/// # Status guard
+/// Only `Active` and `Paused` subscriptions may be charged.
+/// `Cancelled` and `InsufficientBalance` are rejected with `Error::NotActive`.
+///
+/// # Lifetime cap
+/// If the subscription has a `lifetime_cap`, the charge is rejected when
+/// `lifetime_charged + amount > lifetime_cap` (returns `Error::LifetimeCapReached`).
+/// On success, `lifetime_charged` is incremented by `amount`.
+///
+/// # Event
+/// Emits `("oneoff_ch", subscription_id)` → `OneOffChargedEvent { subscription_id, merchant, amount }`.
+///
+/// # Billing statement
+/// Appends a statement row with `BillingChargeKind::OneOff`; `period_start == period_end == now`.
+pub fn do_charge_one_off(
+    env: &Env,
+    subscription_id: u32,
+    merchant: Address,
+    amount: i128,
+) -> Result<(), Error> {
+    // ── 1. Authenticate ───────────────────────────────────────────────────────
+    merchant.require_auth();
+
+    // ── 2. Validate amount (must be positive) ─────────────────────────────────
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    // ── 3. Load subscription ──────────────────────────────────────────────────
+    let mut sub: Subscription = env
+        .storage()
+        .instance()
+        .get(&subscription_id)
+        .ok_or(Error::NotFound)?;
+
+    // ── 4. Authorize: caller must be THIS subscription's merchant ─────────────
+    if sub.merchant != merchant {
+        return Err(Error::Unauthorized);
+    }
+
+    // ── 5. Status guard: Active or Paused only ────────────────────────────────
+    match sub.status {
+        SubscriptionStatus::Active | SubscriptionStatus::Paused => {} // allowed
+        _ => return Err(Error::NotActive),
+    }
+
+    // ── 6. Lifetime cap check ─────────────────────────────────────────────────
+    if let Some(cap) = sub.lifetime_cap {
+        let new_charged = safe_math::checked_add_i128(sub.lifetime_charged, amount)
+            .ok_or(Error::Overflow)?;
+        if new_charged > cap {
+            return Err(Error::LifetimeCapReached);
+        }
+    }
+
+    // ── 7. Balance check (no overdraft) ───────────────────────────────────────
+    if amount > sub.prepaid_balance {
+        return Err(Error::InsufficientPrepaidBalance);
+    }
+
+    // ── 8. Effects (CEI: state before interaction) ────────────────────────────
+    sub.prepaid_balance = safe_math::checked_sub_i128(sub.prepaid_balance, amount)
+        .ok_or(Error::Overflow)?;
+    sub.lifetime_charged = safe_math::checked_add_i128(sub.lifetime_charged, amount)
+        .ok_or(Error::Overflow)?;
+    // NOTE: last_payment_timestamp is intentionally NOT updated (per spec).
+
+    env.storage().instance().set(&subscription_id, &sub);
+
+    // ── 9. Credit merchant balance ────────────────────────────────────────────
+    crate::merchant::credit_merchant(env, &sub.merchant, &sub.token, amount);
+
+    // ── 10. Billing statement (period_start == period_end == now) ─────────────
+    let now = env.ledger().timestamp();
+    crate::statements::append_statement(
+        env,
+        subscription_id,
+        amount,
+        sub.merchant.clone(),
+        BillingChargeKind::OneOff,
+        now, // period_start
+        now, // period_end  (one-off has no interval window)
+    )?;
+
+    // ── 11. Emit event ────────────────────────────────────────────────────────
+    env.events().publish(
+        (Symbol::new(env, "oneoff_ch"), subscription_id),
+        OneOffChargedEvent {
+            subscription_id,
+            merchant: sub.merchant,
+            amount,
+        },
+    );
+
+    Ok(())
+}
