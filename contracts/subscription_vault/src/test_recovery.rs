@@ -1,13 +1,15 @@
 #![cfg(test)]
 
-use crate::{Error, RecoveryReason, SubscriptionVault, SubscriptionVaultClient};
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{token, Address, Env, IntoVal, String, Symbol};
+use crate::{
+    Error, RecoveryReason, SubscriptionVault, SubscriptionVaultClient,
+};
+use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::{token, Address, Env, String};
 
 extern crate alloc;
 use alloc::format;
 
-const T0: u64 = 1_000;
+
 const INTERVAL: u64 = 30 * 24 * 60 * 60;
 
 fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
@@ -17,9 +19,7 @@ fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
     let client = SubscriptionVaultClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
     let min_topup = 1_000_000i128;
     client.init(&token, &6, &admin, &min_topup, &(7 * 24 * 60 * 60));
 
@@ -30,7 +30,7 @@ fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 fn test_recovery_success_all_reasons() {
     let (env, client, token, admin) = setup_env();
     let recipient = Address::generate(&env);
-    let token_admin = admin.clone();
+    let _token_admin = admin.clone();
     let token_client = token::StellarAssetClient::new(&env, &token);
 
     // Mint 100 USDC to contract directly (stranded funds)
@@ -45,8 +45,8 @@ fn test_recovery_success_all_reasons() {
 
     for (i, reason) in reasons.iter().enumerate() {
         let recovery_id = String::from_str(&env, &format!("rec_{}", i));
-        let amount = 10_000_000;
-
+        let amount = 10_000_000i128;
+        
         let balance_before = token::Client::new(&env, &token).balance(&recipient);
 
         client.recover_stranded_funds(&admin, &token, &recipient, &amount, &recovery_id, reason);
@@ -67,7 +67,7 @@ fn test_recovery_success_all_reasons() {
 
 #[test]
 fn test_recovery_unauthorized() {
-    let (env, client, token, admin) = setup_env();
+    let (env, client, token, _admin) = setup_env();
     let recipient = Address::generate(&env);
     let fake_admin = Address::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
@@ -75,16 +75,9 @@ fn test_recovery_unauthorized() {
     token_client.mint(&client.address, &100_000_000);
 
     let recovery_id = String::from_str(&env, "rec_unauth");
-
-    let result = client.try_recover_stranded_funds(
-        &fake_admin,
-        &token,
-        &recipient,
-        &10_000_000,
-        &recovery_id,
-        &RecoveryReason::UserOverpayment,
-    );
-    assert_eq!(result, Err(Ok(Error::Forbidden)));
+    
+    let result = client.try_recover_stranded_funds(&fake_admin, &token, &recipient, &10_000_000, &recovery_id, &RecoveryReason::UserOverpayment);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -103,7 +96,7 @@ fn test_recovery_amount_validation() {
         &recipient,
         &0,
         &rec_zero,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
     assert_eq!(result, Err(Ok(Error::InvalidRecoveryAmount)));
 
@@ -115,7 +108,7 @@ fn test_recovery_amount_validation() {
         &recipient,
         &-100,
         &rec_neg,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
     assert_eq!(result, Err(Ok(Error::InvalidRecoveryAmount)));
 
@@ -127,7 +120,7 @@ fn test_recovery_amount_validation() {
         &recipient,
         &200_000_000, // Contract only has 100M
         &rec_over,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
     assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
 }
@@ -149,7 +142,7 @@ fn test_recovery_replay_protection() {
         &recipient,
         &10_000_000,
         &recovery_id,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
 
     // Second call with same ID fails
@@ -159,7 +152,7 @@ fn test_recovery_replay_protection() {
         &recipient,
         &10_000_000,
         &recovery_id,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
     assert_eq!(result, Err(Ok(Error::Replay)));
 }
@@ -174,19 +167,11 @@ fn test_state_consistency() {
 
     // 1. Setup subscription and deposit
     token_client.mint(&subscriber, &50_000_000);
-
-    let sub_id = client.create_subscription(
-        &subscriber,
-        &merchant,
-        &10_000_000,
-        &INTERVAL,
-        &false,
-        &None,
-        &None::<u64>,
-    );
-
-    client.deposit_funds(&sub_id, &subscriber, &50_000_000);
-
+    
+    let sub_id = client.create_subscription(&subscriber, &merchant, &10_000_000, &INTERVAL, &false, &None, &None::<u64>);
+    
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
+    
     // Total accounted should be 50M. Contract balance is 50M.
     // Try to recover 1 from accounted funds - should fail
     let rec_id = String::from_str(&env, "rec_steal");
@@ -196,7 +181,7 @@ fn test_state_consistency() {
         &recipient,
         &1,
         &rec_id,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
     assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
 
@@ -211,7 +196,7 @@ fn test_state_consistency() {
         &recipient,
         &20_000_001,
         &rec_id2,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
     assert_eq!(result2, Err(Ok(Error::InsufficientBalance)));
 
@@ -223,7 +208,7 @@ fn test_state_consistency() {
         &recipient,
         &20_000_000,
         &rec_id3,
-        &RecoveryReason::UserOverpayment,
+        &RecoveryReason::UserOverpayment
     );
 
     // 5. Normal operation still works (withdraw)

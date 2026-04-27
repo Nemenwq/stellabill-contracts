@@ -133,6 +133,52 @@ fn resume_from_underfunded_state_requires_sufficient_topup() {
 }
 
 #[test]
+fn deposit_insufficient_token_balance_reverts_no_state_change() {
+    let (env, client, token) = setup_test_env();
+    let (id, subscriber, _merchant) = create_subscription(&env, &client);
+
+    // Mint less than deposit amount
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&subscriber, &500_000i128); // < min_topup 1M
+
+    let initial_sub = client.get_subscription(&id);
+    assert_eq!(initial_sub.prepaid_balance, 0);
+
+    // Should fail with InsufficientFunds (token contract revert), no state change
+    let result = client.try_deposit_funds(&id, &subscriber, &2_000_000i128);
+    assert!(result.is_err()); // Token transfer reverts entire tx
+
+    // Verify no balance change (CEI works)
+    let after_fail = client.get_subscription(&id);
+    assert_eq!(after_fail.prepaid_balance, 0);
+    assert_eq!(after_fail.status, initial_sub.status);
+}
+
+#[test]
+fn deposit_respects_subscriber_credit_limit() {
+    let (env, client, token) = setup_test_env();
+    let subscriber = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let admin = client.get_admin();
+
+    // Set credit limit low
+    client.set_subscriber_credit_limit(&admin, &subscriber, &token, &5_000_000i128);
+
+    let id = client.create_subscription(&subscriber, &merchant, &3_000_000i128, &INTERVAL, &false, &None::<i128>, &None::<u64>);
+
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&subscriber, &10_000_000i128);
+
+    // First deposit within limit
+    client.deposit_funds(&id, &subscriber, &2_000_000i128);
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 2_000_000);
+
+    // Second would exceed exposure (prepaid 2M + deposit 4M > 5M limit)
+    let result = client.try_deposit_funds(&id, &subscriber, &4_000_000i128);
+    assert_eq!(result, Err(Ok(Error::CreditLimitExceeded)));
+}
+
+#[test]
 fn cancel_from_insufficient_balance_succeeds() {
     let (env, client, _) = setup_test_env();
     env.ledger().set_timestamp(T0);

@@ -73,6 +73,7 @@
 // ── Modules ──────────────────────────────────────────────────────────────────
 mod accounting;
 mod admin;
+mod billing_statements;
 mod blocklist;
 mod charge_core;
 mod merchant;
@@ -83,8 +84,12 @@ mod queries;
 mod reentrancy;
 pub mod safe_math;
 mod state_machine;
+mod period_snapshots;
 mod statements;
 mod subscription;
+mod types;
+#[cfg(test)]
+pub mod test_utils;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
@@ -102,7 +107,7 @@ mod test_insufficient_balance;
 #[cfg(test)]
 mod test_multi_actor;
 #[cfg(test)]
-mod test_plan_versioning;
+mod test_oracle;
 #[cfg(test)]
 mod test_recovery;
 #[cfg(test)]
@@ -114,8 +119,11 @@ mod test_security;
 #[cfg(test)]
 mod test_usage_limits;
 #[cfg(test)]
-mod test_utils;
-mod types;
+mod test_deterministic_charging;
+#[cfg(test)]
+mod test_emergency_stop_lifetime_caps;
+#[cfg(test)]
+mod test_billing_period_snapshots;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -125,19 +133,24 @@ pub use queries::{compute_next_charge_info, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIS
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
-    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingRetentionConfig,
-    BillingStatement, BillingStatementAggregate, BillingStatementsPage, CapInfo,
-    ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
+    CapInfo, ChargeExecutionResult, ContractSnapshot, DataKey, EmergencyStopDisabledEvent,
     EmergencyStopEnabledEvent, Error, FundsDepositedEvent, LifetimeCapReachedEvent, MerchantConfig,
-    MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantPausedEvent,
+    MerchantUnpausedEvent, MerchantWithdrawalEvent, MetadataDeletedEvent,
     MetadataSetEvent, MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleConfig,
-    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateDisabledEvent,
-    PlanTemplateUpdatedEvent, ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent,
-    RecoveryReason, Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
+    OraclePrice, PartialRefundEvent, PlanTemplate, PlanTemplateUpdatedEvent,
+    ProtocolFeeChargedEvent, ProtocolFeeConfiguredEvent, RecoveryEvent, RecoveryReason,
+    Subscription, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
     SubscriptionChargedEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
-    SubscriptionPausedEvent, SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary,
+    SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent,
+    SubscriptionStatus, SubscriptionSummary, SubscriberWithdrawalEvent,
+    SubscriptionArchivedEvent, SubscriptionExpiredEvent,
     TokenEarnings, TokenReconciliationSnapshot, UsageLimits, UsageState, UsageStatementEvent,
     MAX_METADATA_KEYS, MAX_METADATA_KEY_LENGTH, MAX_METADATA_VALUE_LENGTH,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -174,7 +187,7 @@ fn require_admin_auth(env: &Env, admin: &Address) -> Result<(), Error> {
 fn get_emergency_stop(env: &Env) -> bool {
     env.storage()
         .instance()
-        .get(&Symbol::new(env, "emergency_stop"))
+        .get(&DataKey::EmergencyStop)
         .unwrap_or(false)
 }
 
@@ -280,6 +293,20 @@ impl SubscriptionVault {
         admin::do_rotate_admin(&env, current_admin, new_admin)
     }
 
+    /// Configure oracle pricing parameters. Admin only.
+    ///
+    /// Enables/disables oracle, sets the oracle address, and defines staleness bounds.
+    pub fn set_oracle_config(
+        env: Env,
+        admin: Address,
+        enabled: bool,
+        oracle: Option<Address>,
+        max_age_seconds: u64,
+    ) -> Result<(), Error> {
+        admin::require_admin_auth(&env, &admin)?;
+        crate::oracle::set_oracle_config(&env, enabled, oracle, max_age_seconds)
+    }
+
     /// Allows the admin to recover funds that are not tied to any subscription.
     ///
     /// This should only be used when funds are clearly not part of normal flows.
@@ -358,7 +385,7 @@ impl SubscriptionVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "emergency_stop"), &true);
+            .set(&DataKey::EmergencyStop, &true);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
             EmergencyStopEnabledEvent {
@@ -399,7 +426,7 @@ impl SubscriptionVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "emergency_stop"), &false);
+            .set(&DataKey::EmergencyStop, &false);
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
             EmergencyStopDisabledEvent {
@@ -440,13 +467,13 @@ impl SubscriptionVault {
         let token: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "token"))
+            .get(&DataKey::Token)
             .ok_or(Error::NotFound)?;
         let min_topup: i128 = admin::get_min_topup(&env)?;
         let next_id: u32 = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "next_id"))
+            .get(&DataKey::NextId)
             .unwrap_or(0);
 
         env.events().publish(
@@ -569,7 +596,7 @@ impl SubscriptionVault {
         let next_id: u32 = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "next_id"))
+            .get(&DataKey::NextId)
             .unwrap_or(0);
         if start_id >= next_id {
             return Ok(Vec::new(&env));
@@ -580,7 +607,7 @@ impl SubscriptionVault {
         let mut exported = 0u32;
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env.storage().instance().get::<u32, Subscription>(&id) {
+            if let Some(sub) = env.storage().instance().get::<_, Subscription>(&DataKey::Sub(id)) {
                 out.push_back(SubscriptionSummary {
                     subscription_id: id,
                     subscriber: sub.subscriber,
@@ -932,22 +959,6 @@ impl SubscriptionVault {
             usage_enabled,
             lifetime_cap,
         )
-    }
-
-    /// Disables a plan template, preventing new subscriptions from being created.
-    /// Existing subscriptions created from this plan are unaffected.
-    ///
-    /// Only the plan’s merchant can call this.
-    ///
-    /// # Errors
-    /// - `Forbidden` if caller is not the merchant
-    /// - `NotFound` if template doesn't exist
-    pub fn disable_plan_template(
-        env: Env,
-        merchant: Address,
-        plan_template_id: u32,
-    ) -> Result<(), Error> {
-        subscription::do_disable_plan_template(&env, merchant, plan_template_id)
     }
 
     /// Sets the max number of active subscriptions a user can have for a plan.
@@ -1485,8 +1496,7 @@ impl SubscriptionVault {
     /// # Errors
     /// NotFound → subscription doesn’t exist.
     pub fn get_next_charge_info(env: Env, subscription_id: u32) -> Result<NextChargeInfo, Error> {
-        let sub = queries::get_subscription(&env, subscription_id)?;
-        Ok(compute_next_charge_info(&sub))
+        queries::get_next_charge_info(&env, subscription_id)
     }
 
     /// Return subscriptions for a merchant, paginated.
@@ -1503,8 +1513,7 @@ impl SubscriptionVault {
 
     /// Return the total number of subscriptions ever created.
     pub fn get_subscription_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "next_id");
-        env.storage().instance().get(&key).unwrap_or(0u32)
+        env.storage().instance().get(&DataKey::NextId).unwrap_or(0u32)
     }
 
     /// Return the total number of subscriptions for a merchant.
@@ -1536,6 +1545,64 @@ impl SubscriptionVault {
     /// When no cap is configured all cap-related fields return `None` / `false`.
     pub fn get_cap_info(env: Env, subscription_id: u32) -> Result<CapInfo, Error> {
         queries::get_cap_info(&env, subscription_id)
+    }
+
+    /// Set or clear the contract-wide default lifetime cap applied to new subscriptions.
+    ///
+    /// When set, any `create_subscription` call that provides no explicit `lifetime_cap`
+    /// inherits this value (unless a per-merchant default takes precedence).
+    /// Pass `None` to remove the global default.
+    ///
+    /// # Auth
+    /// Admin only.
+    pub fn set_global_cap_default(
+        env: Env,
+        admin: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_set_global_cap_default(&env, admin, cap)
+    }
+
+    /// Return the current contract-wide default lifetime cap, or `None` if unset.
+    pub fn get_global_cap_default(env: Env) -> Option<i128> {
+        subscription::get_global_cap_default(&env)
+    }
+
+    /// Set or clear a per-merchant default lifetime cap for all new subscriptions to this merchant.
+    ///
+    /// Overrides the global default for subscriptions created against `merchant`.
+    /// Pass `None` to fall back to the global default.
+    ///
+    /// # Auth
+    /// Merchant address must authorize.
+    pub fn set_merchant_cap_default(
+        env: Env,
+        merchant: Address,
+        cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_set_merchant_cap_default(&env, merchant, cap)
+    }
+
+    /// Return the per-merchant default lifetime cap, or `None` if unset.
+    pub fn get_merchant_cap_default(env: Env, merchant: Address) -> Option<i128> {
+        subscription::get_merchant_cap_default(&env, merchant)
+    }
+
+    /// Update the lifetime cap on an existing subscription.
+    ///
+    /// - Raising or removing the cap is always allowed.
+    /// - Lowering the cap below `lifetime_charged` is rejected with `LifetimeCapReached`.
+    /// - Setting to `None` removes the cap entirely.
+    ///
+    /// # Auth
+    /// Admin only.
+    pub fn update_subscription_cap(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+        new_cap: Option<i128>,
+    ) -> Result<(), Error> {
+        subscription::do_update_subscription_cap(&env, admin, subscription_id, new_cap)
     }
 
     /// Return subscription billing statements using offset/limit pagination.
@@ -1579,14 +1646,37 @@ impl SubscriptionVault {
         )
     }
 
-    /// Add a new accepted token.
+    /// Return a single billing period snapshot by subscription and period index.
     ///
-    /// # Auth
-    /// - Admin only
+    /// `period_index` is `ledger_timestamp / interval_seconds` for the billing period.
+    /// Returns `None` when no charge has been processed for that period.
+    pub fn get_period_snapshot(
+        env: Env,
+        subscription_id: u32,
+        period_index: u64,
+    ) -> Option<BillingPeriodSnapshot> {
+        period_snapshots::get_period_snapshot(&env, subscription_id, period_index)
+    }
+
+    /// Return the most-recent billing period snapshots for a subscription, newest first.
     ///
-    /// # Errors
-    /// - Unauthorized
-    /// - TokenAlreadyAccepted
+    /// - `limit`: maximum number of snapshots to return.
+    pub fn list_period_snapshots(
+        env: Env,
+        subscription_id: u32,
+        limit: u32,
+    ) -> Vec<BillingPeriodSnapshot> {
+        period_snapshots::list_period_snapshots(&env, subscription_id, limit)
+    }
+
+/// Add a new accepted token.
+///
+/// # Auth
+/// - Admin only
+///
+/// # Errors
+/// - Unauthorized
+/// - TokenAlreadyAccepted
     pub fn add_accepted_token(
         env: Env,
         admin: Address,
@@ -1746,25 +1836,6 @@ impl SubscriptionVault {
             },
         );
         Ok(summary)
-    }
-
-    /// Configure price oracle integration.
-    ///
-    /// # Auth
-    /// - Admin only
-    ///
-    /// # Errors
-    /// - Unauthorized
-    /// - InvalidConfig
-    pub fn set_oracle_config(
-        env: Env,
-        admin: Address,
-        enabled: bool,
-        oracle: Option<Address>,
-        max_age_seconds: u64,
-    ) -> Result<(), Error> {
-        require_admin_auth(&env, &admin)?;
-        oracle::set_oracle_config(&env, enabled, oracle, max_age_seconds)
     }
 
     /// Read the currently configured oracle integration settings.
@@ -1979,6 +2050,54 @@ impl SubscriptionVault {
         blocklist::is_blocklisted(&env, &subscriber)
     }
 
+    /// Initialize merchant configuration with payout settings and operational flags.
+    ///
+    /// Creates a new merchant config record with validation. This is the recommended way
+    /// for merchants to set up their configuration before accepting subscriptions.
+    ///
+    /// # Arguments
+    ///
+    /// * `merchant` — Must authorize and must be the merchant's address.
+    /// * `payout_address` — Address where the merchant receives payouts.
+    /// * `fee_bips` — Fee percentage in bips (0-10000). 0 means no fee.
+    /// * `allowed_operations` — Bitmap of allowed operations (see OP_* constants).
+    /// * `fee_address` — Optional address for platform fee routing.
+    /// * `redirect_url` — URL for off-chain callbacks.
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must authorize.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::InvalidPayoutAddress`] — Payout address is zero.
+    /// * [`Error::InvalidFeeBips`] — Fee exceeds 100%.
+    /// * [`Error::InvalidOperations`] — Invalid operation bits.
+    /// * [`Error::MustAllowChargeOperation`] — CHARGE operation must be enabled.
+    ///
+    /// # Events
+    ///
+    /// Emits [`MerchantConfigInitializedEvent`].
+    pub fn initialize_merchant_config(
+        env: Env,
+        merchant: Address,
+        payout_address: Address,
+        fee_bips: i32,
+        allowed_operations: i32,
+        fee_address: Option<Address>,
+        redirect_url: String,
+    ) -> Result<MerchantConfig, Error> {
+        merchant::initialize_merchant_config(
+            &env,
+            merchant,
+            payout_address,
+            fee_bips,
+            allowed_operations,
+            fee_address,
+            redirect_url,
+        )
+    }
+
     /// Set global configuration for a merchant.
     ///
     /// Stores a [`MerchantConfig`] with optional fee routing, a redirect URL, and a
@@ -1989,9 +2108,7 @@ impl SubscriptionVault {
     /// # Arguments
     ///
     /// * `merchant` — Must authorize the transaction.
-    /// * `fee_address` — Optional address to receive a portion of charges (platform fee routing).
-    /// * `redirect_url` — Merchant-supplied URL used by off-chain frontends for post-payment redirects.
-    /// * `is_paused` — Convenience pause flag mirrored in config storage.
+    /// * `config` — Full MerchantConfig struct.
     ///
     /// # Auth
     ///
@@ -2000,19 +2117,65 @@ impl SubscriptionVault {
     /// # Errors
     ///
     /// * [`Error::Unauthorized`] — `merchant` auth failed.
+    /// * Validation errors from config.
     pub fn set_merchant_config(
         env: Env,
         merchant: Address,
-        fee_address: Option<Address>,
-        redirect_url: String,
-        is_paused: bool,
+        config: MerchantConfig,
     ) -> Result<(), Error> {
-        let config = crate::types::MerchantConfig {
-            fee_address,
-            redirect_url,
-            is_paused,
-        };
         merchant::set_merchant_config(&env, merchant, config)
+    }
+
+    /// Update merchant configuration with partial fields.
+    ///
+    /// Allows updating specific fields without replacing the entire config.
+    /// Unchanged fields retain their current values.
+    ///
+    /// # Arguments
+    ///
+    /// * `merchant` — Must authorize.
+    /// * `new_payout_address` — Optional new payout address.
+    /// * `new_fee_bips` — Optional new fee in bips.
+    /// * `new_allowed_operations` — Optional new operations bitmap.
+    /// * `new_is_active` — Optional active flag.
+    /// * `new_fee_address` — Optional new fee address.
+    /// * `new_redirect_url` — Optional new redirect URL.
+    /// * `new_is_paused` — Optional pause flag.
+    ///
+    /// # Auth
+    ///
+    /// `merchant` must authorize.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::ConfigNotFound`] — Config not initialized.
+    /// * Validation errors for provided fields.
+    ///
+    /// # Events
+    ///
+    /// Emits [`MerchantConfigUpdatedEvent`].
+    pub fn update_merchant_config(
+        env: Env,
+        merchant: Address,
+        new_payout_address: Option<Address>,
+        new_fee_bips: Option<i32>,
+        new_allowed_operations: Option<i32>,
+        new_is_active: Option<bool>,
+        new_fee_address: Option<Option<Address>>,
+        new_redirect_url: Option<String>,
+        new_is_paused: Option<bool>,
+    ) -> Result<MerchantConfig, Error> {
+        merchant::update_merchant_config(
+            &env,
+            merchant,
+            new_payout_address,
+            new_fee_bips,
+            new_allowed_operations,
+            new_is_active,
+            new_fee_address,
+            new_redirect_url,
+            new_is_paused,
+        )
     }
 
     /// Return the global configuration for a merchant.
