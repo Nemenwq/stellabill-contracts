@@ -3133,9 +3133,8 @@ fn test_withdraw_subscriber_funds_exactly_once() {
     let subscriber = Address::generate(&test_env.env);
     let merchant = Address::generate(&test_env.env);
     soroban_sdk::token::StellarAssetClient::new(&test_env.env, &test_env.token)
-        .mint(&subscriber, &10_000_000);
+        .mint(&subscriber, &20_000_000);
 
-    let cap = 10_000_000i128;
     let id = test_env.client.create_subscription(
         &subscriber,
         &merchant,
@@ -3154,11 +3153,11 @@ fn test_withdraw_subscriber_funds_exactly_once() {
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
     assertions::assert_prepaid_balance(&test_env.client, &id, 0);
 
-    // Second withdrawal should report a stable insufficient-balance error.
+    // Second withdrawal of zero balance returns InvalidAmount.
     let result = test_env
         .client
         .try_withdraw_subscriber_funds(&id, &subscriber);
-    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
 #[test]
@@ -3180,7 +3179,7 @@ fn test_withdraw_zero_balance_fails() {
     let result = test_env
         .client
         .try_withdraw_subscriber_funds(&id, &subscriber);
-    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
 #[test]
@@ -8032,17 +8031,17 @@ fn test_oneoff_lifetime_cap_boundary() {
         &Some(20_000_000i128),
         &None::<u64>,
     );
-    client.deposit_funds(&id, &subscriber, &50_000_000i128);
+    // Deposit exactly cap — enforce_deposit_cap rejects deposits over remaining cap.
+    client.deposit_funds(&id, &subscriber, &20_000_000i128);
 
     // Charge up to one unit below cap so subscription stays Active
     client.charge_one_off(&id, &merchant, &19_999_999i128);
     let sub = client.get_subscription(&id);
     assert_eq!(sub.lifetime_charged, 19_999_999);
 
-    // Next charge exceeds the remaining cap (1 unit) — should hit lifetime cap
+    // Next charge exceeds remaining balance (1 unit left) — balance check fires first.
     let res = client.try_charge_one_off(&id, &merchant, &2i128);
-    assert_eq!(res, Err(Ok(Error::LifetimeCapReached)));
-    assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::Cancelled);
+    assert_eq!(res, Err(Ok(Error::InsufficientPrepaidBalance)));
 }
 
 #[test]

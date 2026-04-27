@@ -464,7 +464,13 @@ pub fn do_deposit_funds(
     if subscriber != sub.subscriber {
         return Err(Error::Unauthorized);
     }
-    
+
+    // Block deposits to subscriptions whose merchant is paused — paused
+    // merchants must not accumulate new subscriber funds.
+    if crate::merchant::get_merchant_paused(env, sub.merchant.clone()) {
+        return Err(Error::MerchantPaused);
+    }
+
     let now = env.ledger().timestamp();
     // Expiration guard
     if sub.is_expired(now) {

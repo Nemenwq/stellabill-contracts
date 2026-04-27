@@ -122,7 +122,7 @@ fn test_cleanup_and_archival() {
     assert_eq!(sub_archived.amount, amount);
 
     // Archival reads - can still read it
-    assert_eq!(sub_archived.amount, 100);
+    assert_eq!(sub_archived.amount, amount);
 
     // Ensure funds can be withdrawn (already done by cleanup_subscription in some impls,
     // or via explicit withdraw)

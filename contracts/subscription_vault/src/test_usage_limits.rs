@@ -142,7 +142,8 @@ fn test_exact_lifetime_cap_boundary() {
         &Some(50_000_000i128),
         &None,
     );
-    client.deposit_funds(&sub_id, &subscriber, &100_000_000i128);
+    // enforce_deposit_cap caps deposit at `cap` (50M).
+    client.deposit_funds(&sub_id, &subscriber, &50_000_000i128);
 
     client.charge_usage(&sub_id, &50_000_000i128);
     let sub = client.get_subscription(&sub_id);

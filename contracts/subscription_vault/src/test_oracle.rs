@@ -114,6 +114,15 @@ fn test_oracle_staleness_and_missing_data() {
     token_client.mint(&subscriber, &20_000_000);
     client.deposit_funds(&sub_id, &subscriber, &20_000_000);
 
+    // Advance past the first interval boundary so charge_subscription is allowed.
+    env.ledger().set_timestamp(current_time + INTERVAL + 1);
+    // Re-set fresh oracle price at the new timestamp.
+    env.invoke_contract::<()>(
+        &oracle_id,
+        &Symbol::new(&env, "set_price"),
+        (1_000_000i128, current_time + INTERVAL + 1).into_val(&env),
+    );
+
     // Now it should pass with the fresh price (it will deduct balance)
     let res3 = client.try_charge_subscription(&sub_id);
     assert!(res3.is_ok());
@@ -147,27 +156,28 @@ fn test_oracle_rate_change_mid_interval() {
     // Price = 1 USDC / token (ignoring decimals in this specific check logic, using 1:1)
     // Actually the oracle resolves: token_amount = ceil(quote_amount * 10^decimals / oracle_price)
     // token decimals = 6
+    // Charge 1: advance past the first interval boundary first.
+    env.ledger().set_timestamp(current_time + INTERVAL + 1);
     let initial_price = 1_000_000i128; // oracle returns 1.0 (with whatever decimal it assumes, here it divides)
+    // Re-set price with fresh timestamp (max_age=3600, INTERVAL is 30 days).
     env.invoke_contract::<()>(
         &oracle_id,
         &Symbol::new(&env, "set_price"),
-        (initial_price, current_time).into_val(&env),
+        (initial_price, current_time + INTERVAL + 1).into_val(&env),
     );
-
-    // Charge 1: should charge 5 * 10^6 * 10^6 / 10^6 => 5,000,000
     client.charge_subscription(&sub_id);
     let sub_info = client.get_subscription(&sub_id);
     assert_eq!(sub_info.prepaid_balance, 95_000_000);
 
     // Advance time and change rate mid-interval
-    env.ledger().set_timestamp(current_time + INTERVAL); // Time for next charge
+    env.ledger().set_timestamp(current_time + 2 * INTERVAL + 1); // Time for next charge
 
     // Price drops, now 1 quote = 0.5 token in oracle context. Meaning we need TWICE the tokens.
     // Price = 500_000. token_amount = ceil( 5_000_000 * 1_000_000 / 500_000 ) = 10_000_000
     env.invoke_contract::<()>(
         &oracle_id,
         &Symbol::new(&env, "set_price"),
-        (500_000i128, current_time + INTERVAL).into_val(&env),
+        (500_000i128, current_time + 2 * INTERVAL + 1).into_val(&env),
     );
 
     client.charge_subscription(&sub_id);

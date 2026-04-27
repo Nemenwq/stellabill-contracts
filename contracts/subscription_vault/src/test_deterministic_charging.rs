@@ -74,11 +74,14 @@ fn test_usage_charge_determinism() {
         .client
         .charge_usage_with_reference(&sub_id, &usage_amount, &reference);
 
-    // Replay with identical reference should fail
+    // Replay with identical reference returns Replay variant
     let res2 = test_env
         .client
         .try_charge_usage_with_reference(&sub_id, &usage_amount, &reference);
-    assert!(matches!(res2, Err(Ok(Error::Replay))));
+    assert!(matches!(
+        res2,
+        Ok(Ok(crate::types::UsageChargeResult::Replay))
+    ));
 
     // Different reference at same timestamp should succeed
     let reference2 = String::from_str(&test_env.env, "req_124");
@@ -200,7 +203,7 @@ fn test_same_timestamp_repeated_calls() {
     let res_rep = test_env.client.try_charge_subscription(&sub_id);
     assert!(matches!(res_rep, Err(Ok(Error::Replay))));
 
-    // Usage charge at same timestamp with same reference should fail
+    // Usage charge at same timestamp with same reference returns Replay variant
     let ref_str = String::from_str(&test_env.env, "t1");
     test_env
         .client
@@ -208,7 +211,10 @@ fn test_same_timestamp_repeated_calls() {
     let res_usage_rep = test_env
         .client
         .try_charge_usage_with_reference(&sub_id, &1, &ref_str);
-    assert!(matches!(res_usage_rep, Err(Ok(Error::Replay))));
+    assert!(matches!(
+        res_usage_rep,
+        Ok(Ok(crate::types::UsageChargeResult::Replay))
+    ));
 }
 
 #[test]
