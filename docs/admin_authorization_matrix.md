@@ -37,6 +37,8 @@ the host layer when no signature is present.
 | `set_oracle_config` | Explicit `admin` arg must equal stored admin | `Unauthorized` | `Unauthorized` | Config validation happens after auth |
 | `remove_from_blocklist` | Explicit `admin` arg must equal stored admin | `Unauthorized` | `Unauthorized` | Uses the same centralized guard |
 | `set_protocol_fee` | Explicit `admin` arg must equal stored admin | `Forbidden` | `Forbidden` | Uses direct admin check, returns `Forbidden` not `Unauthorized` |
+| `charge_subscription` | Stored admin is loaded from state and must sign | Host auth failure if unsigned | New admin signature required after rotation | Single interval charge |
+| `charge_usage` | Stored admin is loaded from state and must sign | Host auth failure if unsigned | New admin signature required after rotation | Metered usage charge |
 | `batch_charge` | Stored admin is loaded from state and must sign | Host auth failure if unsigned | New admin signature required after rotation | No caller-supplied admin parameter |
 
 ## Rotation and replay notes
@@ -44,10 +46,10 @@ the host layer when no signature is present.
 - Admin rotation is atomic: once `rotate_admin` succeeds, the old admin loses
   access to all admin-only routes in the same state version.
 - Reusing an old auth context after rotation must fail as `Unauthorized` for
-  explicit-admin routes.
-- `batch_charge` is the one exception to the explicit-admin pattern because it
-  reads the stored admin internally; after rotation, only the new stored admin's
-  signature satisfies the host auth check.
+  explicit-admin routes and host auth failure for stored-admin routes.
+- `batch_charge`, `charge_subscription`, and `charge_usage` are the exceptions to the
+  explicit-admin pattern because they read the stored admin internally; after rotation,
+  only the new stored admin's signature satisfies the host auth check.
 
 ## Reviewer Checklist for New Admin Entrypoints
 
