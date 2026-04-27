@@ -682,7 +682,6 @@ pub fn do_resume_subscription(
     if sub.status == SubscriptionStatus::Active {
         return Ok(());
     }
-
     if (sub.status == SubscriptionStatus::InsufficientBalance
         || sub.status == SubscriptionStatus::GracePeriod)
         && sub.prepaid_balance < sub.amount
@@ -690,16 +689,18 @@ pub fn do_resume_subscription(
         return Err(Error::InsufficientBalance);
     }
 
+    let previous_status = sub.status;
     sub.status = SubscriptionStatus::Active;
     env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
-    env.events().publish(
+     env.events().publish(
         (Symbol::new(env, "sub_resumed"), subscription_id),
         crate::types::SubscriptionResumedEvent {
             subscription_id,
             subscriber: sub.subscriber.clone(),
             merchant: sub.merchant.clone(),
             authorizer,
+            previous_status,
             timestamp: env.ledger().timestamp(),
         },
     );

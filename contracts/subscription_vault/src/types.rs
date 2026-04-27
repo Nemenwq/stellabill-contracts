@@ -985,6 +985,16 @@ pub struct SubscriptionPausedEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when a subscription enters grace period.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GracePeriodEnteredEvent {
+    pub subscription_id: u32,
+    pub previous_status: SubscriptionStatus,
+    pub grace_expires_at: u64,
+    pub timestamp: u64,
+}
+
 /// Event emitted when a subscription is resumed.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -993,6 +1003,7 @@ pub struct SubscriptionResumedEvent {
     pub subscriber: Address,
     pub merchant: Address,
     pub authorizer: Address,
+    pub previous_status: SubscriptionStatus,
     pub timestamp: u64,
 }
 
