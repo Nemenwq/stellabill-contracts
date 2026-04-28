@@ -302,6 +302,8 @@ pub enum Error {
     SubscriberBlocklisted = 1003,
     /// Rotation to the same admin address is not allowed.
     SelfRotation = 1004,
+    /// Nonce mismatch — the operation is a replay or uses an out-of-sequence nonce.
+    NonceAlreadyUsed = 1005,
 
     // --- Not Found (2000-2099) ---
     /// The requested resource was not found in storage.

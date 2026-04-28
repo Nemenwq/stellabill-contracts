@@ -121,6 +121,8 @@ mod test_security;
 mod test_usage_limits;
 #[cfg(test)]
 mod test_billing_period_snapshots;
+#[cfg(test)]
+mod test_replay_protection;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
