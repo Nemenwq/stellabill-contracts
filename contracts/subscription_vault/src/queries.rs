@@ -209,6 +209,16 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Archived => false,
     };
 
+    let reason = match subscription.status {
+        SubscriptionStatus::Active => soroban_sdk::symbol_short!("active"),
+        SubscriptionStatus::GracePeriod => soroban_sdk::symbol_short!("grace"),
+        SubscriptionStatus::InsufficientBalance => soroban_sdk::symbol_short!("insuf_bal"),
+        SubscriptionStatus::Paused => soroban_sdk::symbol_short!("paused"),
+        SubscriptionStatus::Cancelled => soroban_sdk::symbol_short!("cancelled"),
+        SubscriptionStatus::Expired => soroban_sdk::symbol_short!("expired"),
+        SubscriptionStatus::Archived => soroban_sdk::symbol_short!("archived"),
+    };
+
     NextChargeInfo {
         next_charge_timestamp,
         is_charge_expected,

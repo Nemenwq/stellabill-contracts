@@ -46,9 +46,9 @@ use crate::types::{
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
-    Subscription, SubscriptionCancelledEvent, SubscriptionMigratedEvent,
-    SubscriptionRecoveryReadyEvent,
-    SubscriptionStatus, UsageLimits,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent, SubscriptionPausedEvent,
+    SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -437,6 +437,7 @@ pub fn do_create_subscription_with_token(
             interval_seconds,
             lifetime_cap,
             expires_at,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -612,12 +613,12 @@ pub fn do_pause_subscription(
         return Err(Error::Forbidden);
     }
 
-    transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
-
     // Idempotent: already paused — nothing to do, no event.
     if sub.status == SubscriptionStatus::Paused {
         return Ok(());
     }
+
+    transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
 
     env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
@@ -666,8 +667,6 @@ pub fn do_resume_subscription(
         crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
-    transition_to(&mut sub.status, SubscriptionStatus::Active)?;
-
     // Idempotent: already active — nothing to do, no event.
     if sub.status == SubscriptionStatus::Active {
         return Ok(());
@@ -679,6 +678,8 @@ pub fn do_resume_subscription(
     {
         return Err(Error::InsufficientBalance);
     }
+
+    transition_to(&mut sub.status, SubscriptionStatus::Active)?;
 
     env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
@@ -893,11 +894,6 @@ pub fn do_withdraw_subscriber_funds(
         return Err(Error::Forbidden);
     }
 
-    let amount_to_refund = sub.prepaid_balance;
-    if amount_to_refund <= 0 {
-        return Err(Error::InvalidAmount);
-    }
-
     if sub.status != SubscriptionStatus::Cancelled
         && sub.status != SubscriptionStatus::Expired
         && sub.status != SubscriptionStatus::Archived
@@ -1063,8 +1059,7 @@ pub fn do_set_global_cap_default(
         (Symbol::new(env, "global_cap_set"),),
         GlobalCapDefaultUpdatedEvent {
             admin,
-            old_default,
-            new_default: cap,
+            cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1094,9 +1089,8 @@ pub fn do_set_merchant_cap_default(
     env.events().publish(
         (Symbol::new(env, "merchant_cap_set"), merchant.clone()),
         MerchantCapDefaultUpdatedEvent {
-            merchant,
-            old_default,
-            new_default: cap,
+            admin: merchant,
+            cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1128,14 +1122,16 @@ pub fn do_update_subscription_cap(
     }
 
     sub.lifetime_cap = new_cap;
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
+    // Get admin address for event, fallback to a zero-address if not set
+    let admin_addr = env.storage().instance().get(&DataKey::Admin).unwrap_or(sub.merchant.clone());
+    
     env.events().publish(
         (Symbol::new(env, "cap_updated"), subscription_id),
         LifetimeCapUpdatedEvent {
-            subscription_id,
-            old_cap,
-            new_cap,
+            admin: admin_addr,
+            cap: new_cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1185,13 +1181,11 @@ pub fn do_create_plan_template(
     env.events().publish(
         (Symbol::new(env, "plan_created"), plan_id),
         crate::types::PlanTemplateCreatedEvent {
-            plan_template_id: plan_id,
-            merchant,
-            token,
+            plan_id,
+            admin: merchant.clone(),
+            interval: interval_seconds,
             amount,
-            interval_seconds,
             usage_enabled,
-            lifetime_cap,
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1238,13 +1232,11 @@ pub fn do_create_plan_template_with_token(
     env.events().publish(
         (Symbol::new(env, "plan_created"), plan_id),
         crate::types::PlanTemplateCreatedEvent {
-            plan_template_id: plan_id,
-            merchant,
-            token,
+            plan_id,
+            admin: merchant.clone(),
+            interval: interval_seconds,
             amount,
-            interval_seconds,
             usage_enabled,
-            lifetime_cap,
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1313,7 +1305,7 @@ pub fn do_create_subscription_from_plan(
     env.storage().instance().set(&merchant_key, &ids);
 
     // Maintain token -> subscription-ID index
-    let token_key = DataKey::TokenSubs(plan.token);
+    let token_key = DataKey::TokenSubs(plan.token.clone());
     let mut token_ids: Vec<u32> = env
         .storage()
         .instance()

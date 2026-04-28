@@ -36,7 +36,7 @@ use crate::state_machine::transition_to;
 use crate::subscription::next_charge_time;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, ChargeExecutionResult, DataKey, Error,
+    BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, DataKey, Error,
     LifetimeCapReachedEvent, SubscriptionChargeFailedEvent, SubscriptionChargedEvent,
     SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult, UsageLimits, UsageState,
     UsageStatementEvent, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_INTERVAL_CHARGED,
@@ -201,9 +201,10 @@ pub fn charge_one(
                         (Symbol::new(env, "protocol_fee_charged"), subscription_id),
                         crate::types::ProtocolFeeChargedEvent {
                             subscription_id,
-                            treasury: treasury.clone(),
+                            merchant: sub.merchant.clone(),
+                            token: sub.token.clone(),
                             fee_amount,
-                            merchant_amount,
+                            treasury: treasury.clone(),
                             timestamp: now,
                         },
                     );

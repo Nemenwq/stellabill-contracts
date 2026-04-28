@@ -143,7 +143,7 @@ fn test_expiration_vs_cancellation() {
     let min_topup = 1_000_000i128;
     token_admin.mint(&subscriber, &(min_topup * 5));
 
-    let _expires_at = T0 + 2 * INTERVAL;
+    let expires_at = T0 + 2 * INTERVAL;
 
     // Scenario 1: Cancel before expiry
     let sub_id1 = client.create_subscription_with_token(

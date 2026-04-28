@@ -1209,7 +1209,7 @@ fn test_deposit_funds_event_payload() {
     );
 
     // Verify event data: FundsDepositedEvent { subscription_id, subscriber, amount, prepaid_balance }
-    let event_data: crate::FundsDepositedEvent = deposit_event.2.from_val(&env);
+    let event_data: crate::FundsDepositedEvent = FromVal::from_val(&env, &deposit_event.2);
     assert_eq!(event_data.subscription_id, id);
     assert_eq!(event_data.subscriber, subscriber);
     assert_eq!(event_data.amount, 15_000_000);
@@ -1314,7 +1314,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         Symbol::from_val(&test_env.env, &add_event.1.get(0).expect("missing add topic")),
         Symbol::new(&test_env.env, "blocklist_added")
     );
-    let added: crate::BlocklistAddedEvent = add_event.2.from_val(&test_env.env);
+    let added: crate::BlocklistAddedEvent = FromVal::from_val(&test_env.env, &add_event.2);
     assert_eq!(added.subscriber, subscriber);
     assert_eq!(added.added_by, test_env.admin);
     assert_eq!(added.timestamp, T0);
@@ -1337,7 +1337,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         ),
         Symbol::new(&test_env.env, "blocklist_removed")
     );
-    let removed: crate::BlocklistRemovedEvent = remove_event.2.from_val(&test_env.env);
+    let removed: crate::BlocklistRemovedEvent = FromVal::from_val(&test_env.env, &remove_event.2);
     assert_eq!(removed.subscriber, subscriber);
     assert_eq!(removed.removed_by, test_env.admin);
     assert_eq!(removed.timestamp, T0 + 60);
@@ -2197,7 +2197,7 @@ fn test_compute_next_charge_info_active() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert_eq!(info.next_charge_timestamp, T0 + INTERVAL);
     assert!(info.is_charge_expected);
 }
@@ -2221,7 +2221,7 @@ fn test_compute_next_charge_info_paused() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 2000 + INTERVAL);
 }
@@ -2245,7 +2245,7 @@ fn test_compute_next_charge_info_cancelled() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
 }
 
@@ -2268,7 +2268,7 @@ fn test_compute_next_charge_info_insufficient_balance() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(!info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, 3000 + INTERVAL);
 }
@@ -2399,7 +2399,7 @@ fn test_compute_next_charge_info_overflow_protection() {
         expires_at: None,
         grace_start_timestamp: None,
     };
-    let info = compute_next_charge_info(&sub);
+    let info = compute_next_charge_info(&env, &sub);
     assert!(info.is_charge_expected);
     assert_eq!(info.next_charge_timestamp, u64::MAX);
 }

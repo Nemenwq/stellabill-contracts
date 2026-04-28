@@ -2,6 +2,7 @@
 
 use crate::{
     ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    UsageChargeResult,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{Address, Env, FromVal, String, Symbol, Val, Vec, symbol_short};
@@ -307,7 +308,7 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
             &2i128,
             &String::from_str(&env, "cap-overrun-usage"),
         ),
-        Ok(Ok(()))
+        Ok(Ok(UsageChargeResult::Charged))
     );
 
     let updated = client.get_subscription(&sub_id);

@@ -22,8 +22,10 @@
 
 use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
 use crate::types::{
-    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantPausedEvent,
-    MerchantUnpausedEvent, MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
+    AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
+    TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations,
+    OP_CHARGE,
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
@@ -162,7 +164,6 @@ pub fn set_merchant_config(
             payout_address: updated_config.payout_address.clone(),
             fee_bips: updated_config.fee_bips,
             allowed_operations: updated_config.allowed_operations,
-            is_active: updated_config.is_active,
             timestamp,
         },
     );
@@ -274,6 +275,8 @@ pub fn get_reconciliation_snapshot(
             total_withdrawals: earnings.withdrawals,
             total_refunds: earnings.refunds,
             computed_balance,
+            stored_balance: 0, // Will be computed by caller
+            matches: computed_balance == 0, // Placeholder
         });
     }
     result
@@ -400,6 +403,7 @@ pub fn withdraw_merchant_funds_for_token(
             token: token_addr.clone(),
             amount,
             remaining_balance: new_balance,
+            timestamp: env.ledger().timestamp(),
         },
     );
 
@@ -453,7 +457,6 @@ pub fn merchant_refund(
             subscriber: subscriber.clone(),
             token: token_addr.clone(),
             amount,
-            timestamp: env.ledger().timestamp(),
         },
     );
 
