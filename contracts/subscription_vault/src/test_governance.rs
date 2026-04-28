@@ -115,7 +115,7 @@ fn test_fee_bips_at_maximum_boundary() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1038)")]
+#[should_panic(expected = "Error(Contract, #7001)")]
 fn test_fee_bips_exceeds_maximum() {
     let env = Env::default();
     env.mock_all_auths();
@@ -138,7 +138,7 @@ fn test_fee_bips_exceeds_maximum() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1041)")]
+#[should_panic(expected = "Error(Contract, #7003)")]
 fn test_operations_without_charge_flag() {
     let env = Env::default();
     env.mock_all_auths();
@@ -161,7 +161,7 @@ fn test_operations_without_charge_flag() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1040)")]
+#[should_panic(expected = "Error(Contract, #7002)")]
 fn test_operations_with_invalid_bit() {
     let env = Env::default();
     env.mock_all_auths();
@@ -199,7 +199,7 @@ fn test_get_merchant_config_not_found() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1042)")]
+#[should_panic(expected = "Error(Contract, #2001)")]
 fn test_update_nonexistent_config() {
     let env = Env::default();
     env.mock_all_auths();

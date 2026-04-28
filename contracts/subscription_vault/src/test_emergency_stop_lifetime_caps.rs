@@ -177,7 +177,7 @@ fn test_emergency_stop_blocks_batch_charge() {
 
     client.enable_emergency_stop(&admin);
     let ids = Vec::from_array(&env, [sub_id]);
-    client.batch_charge(&ids);
+    client.batch_charge(&ids, &0u64);
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn test_batch_charge_resumes_normally_after_emergency_stop_disabled() {
     client.disable_emergency_stop(&admin);
 
     let ids = Vec::from_array(&env, [sub_id]);
-    let results = client.batch_charge(&ids);
+    let results = client.batch_charge(&ids, &0u64);
     assert_eq!(results.len(), 1);
     assert!(results.get(0).unwrap().success);
 }
@@ -226,7 +226,8 @@ fn test_lifetime_cap_interval_overrun_cancels_without_debiting_or_crediting() {
         &Some(cap),
         &None::<u64>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &(3 * amount));
+    // enforce_deposit_cap caps single deposit at `cap`.
+    client.deposit_funds(&sub_id, &subscriber, &cap);
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
     assert_eq!(
@@ -266,11 +267,12 @@ fn test_lifetime_cap_usage_exact_hit_charges_then_auto_cancels() {
         &Some(cap),
         &None::<u64>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    // enforce_deposit_cap caps single deposit at `cap`.
+    client.deposit_funds(&sub_id, &subscriber, &cap);
     client.charge_usage_with_reference(&sub_id, &cap, &String::from_str(&env, "cap-exact-usage"));
 
     let sub = client.get_subscription(&sub_id);
-    assert_eq!(sub.prepaid_balance, DEPOSIT - cap);
+    assert_eq!(sub.prepaid_balance, 0);
     assert_eq!(sub.lifetime_charged, cap);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(client.get_merchant_balance(&merchant), cap);
@@ -293,7 +295,8 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         &Some(cap),
         &None::<u64>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &DEPOSIT);
+    // enforce_deposit_cap caps single deposit at `cap`.
+    client.deposit_funds(&sub_id, &subscriber, &cap);
 
     // Simulate a nearly exhausted cap while still active.
     let mut sub = client.get_subscription(&sub_id);
@@ -309,11 +312,16 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
             &String::from_str(&env, "cap-overrun-usage"),
         ),
         Ok(Ok(UsageChargeResult::Charged))
+    let usage_result = client.try_charge_usage_with_reference(
+        &sub_id,
+        &2i128,
+        &String::from_str(&env, "cap-overrun-usage"),
     );
+    assert!(matches!(usage_result, Ok(Ok(_))));
 
     let updated = client.get_subscription(&sub_id);
     assert_eq!(updated.status, SubscriptionStatus::Cancelled);
-    assert_eq!(updated.prepaid_balance, DEPOSIT);
+    assert_eq!(updated.prepaid_balance, cap);
     assert_eq!(updated.lifetime_charged, cap - 1);
     assert_eq!(client.get_merchant_balance(&merchant), 0);
 }
@@ -335,7 +343,8 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
         &Some(cap),
         &None::<u64>,
     );
-    client.deposit_funds(&sub_id, &subscriber, &20_000_000i128);
+    // enforce_deposit_cap caps single deposit at `cap`.
+    client.deposit_funds(&sub_id, &subscriber, &cap);
     client.charge_one_off(&sub_id, &merchant, &cap);
     let events = env.events().all();
 
@@ -346,7 +355,7 @@ fn test_lifetime_cap_oneoff_exact_hit_auto_cancels() {
     let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.lifetime_charged, cap);
-    assert_eq!(sub.prepaid_balance, 15_000_000i128);
+    assert_eq!(sub.prepaid_balance, 0); // deposited exactly cap; charge consumed it all
     assert_eq!(client.get_merchant_balance(&merchant), cap);
 
     assert_eq!(

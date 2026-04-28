@@ -70,6 +70,14 @@ pub fn get_statement(env: &Env, subscription_id: u32, period_index: u32) -> Resu
         .ok_or(Error::NotFound)
 }
 
+/// Return up to `limit` period statements for `subscription_id`, newest first.
+///
+/// `start` is a zero-based offset into the index vector (which is append-order,
+/// i.e. oldest first), so `start = 0` with a large `limit` returns all records
+/// in chronological order. Callers that want newest-first should reverse or use
+/// the offset from the end of the index.
+///
+/// Returns an empty vec when `start` is out of range or `limit` is 0.
 pub fn list_statements_by_subscription(
     env: &Env, subscription_id: u32, start: u32, limit: u32,
 ) -> Vec<PeriodBillingStatement> {
@@ -94,6 +102,11 @@ pub fn list_statements_by_subscription(
     out
 }
 
+/// Return up to `limit` period statements for `merchant` whose `period_end_timestamp`
+/// falls in `[start_timestamp, end_timestamp]` (both inclusive).
+///
+/// `start` is an offset into the filtered result set (for pagination across
+/// multiple calls with the same time range).
 pub fn list_statements_by_merchant_time_range(
     env: &Env, merchant: Address, start_timestamp: u64, end_timestamp: u64, start: u32, limit: u32,
 ) -> Vec<PeriodBillingStatement> {
