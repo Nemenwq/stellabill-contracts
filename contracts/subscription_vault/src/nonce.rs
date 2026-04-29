@@ -45,6 +45,13 @@ pub const DOMAIN_BATCH_CHARGE: u32 = 0;
 /// batch-charge nonce cannot be leveraged to replay a rotate-admin call.
 pub const DOMAIN_ADMIN_ROTATION: u32 = 1;
 
+/// Domain tag for `operator_batch_charge` operations.
+///
+/// Operators have their own nonce sequence independent of the admin's
+/// batch-charge counter, so a captured operator nonce cannot be replayed
+/// as an admin batch-charge (or vice-versa).
+pub const DOMAIN_OPERATOR_BATCH_CHARGE: u32 = 2;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Returns a human-readable `Symbol` label for a domain tag.
@@ -55,6 +62,7 @@ fn domain_label(env: &Env, domain: u32) -> Symbol {
     match domain {
         DOMAIN_BATCH_CHARGE => Symbol::new(env, "batch"),
         DOMAIN_ADMIN_ROTATION => Symbol::new(env, "adm_rot"),
+        DOMAIN_OPERATOR_BATCH_CHARGE => Symbol::new(env, "op_batch"),
         _ => Symbol::new(env, "unknown"),
     }
 }
