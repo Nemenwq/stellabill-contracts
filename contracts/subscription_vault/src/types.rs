@@ -56,8 +56,25 @@ pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    /// Maps a merchant address to its list of subscription IDs. Discriminant 0.
+    /// Maps a merchant address to its list of subscription IDs.
     MerchantSubs(Address),
+    /// USDC token contract address.
+    Token,
+    /// Authorized admin address.
+    Admin,
+    /// Minimum deposit threshold.
+    MinTopup,
+    /// Auto-incrementing subscription ID counter.
+    NextId,
+    /// On-chain storage schema version.
+    SchemaVersion,
+    /// Subscription record keyed by its ID.
+    Sub(u32),
+    /// Last charged billing-period index for replay protection.
+    ChargedPeriod(u32),
+    /// Idempotency key stored per subscription.
+    IdemKey(u32),
+    /// Emergency stop flag - when true, critical operations are blocked.
     /// USDC token contract address. Discriminant 1.
     Token,
     /// Authorized admin address. Discriminant 2.
@@ -76,55 +93,60 @@ pub enum DataKey {
     IdemKey(u32),
     /// Emergency stop flag - when true, critical operations are blocked. Discriminant 9.
     EmergencyStop,
-    /// Merchant-wide pause flag. Discriminant 10.
+    /// Merchant-wide pause flag.
     MerchantPaused(Address),
-    /// Detailed billing statement for a subscription charge. Discriminant 11.
+    /// Detailed billing statement for a subscription charge.
     BillingStatement(u32, u32),
-    /// Secondary index for statements by subscription. Discriminant 12.
+    /// Secondary index for statements by subscription.
     BillingStatementsBySubscription(u32),
-    /// Secondary index for statements by merchant. Discriminant 13.
+    /// Secondary index for statements by merchant.
     BillingStatementsByMerchant(Address),
-    /// Total accounted balance for recovery validation. Discriminant 14.
+    /// Total accounted balance for recovery validation.
     TotalAccounted(Address),
-    /// Replay protection key for recovery operations. Discriminant 15.
+    /// Replay protection key for recovery operations.
     Recovery(String),
-    /// Merchant configuration (pause state, fee routing, etc.). Discriminant 16.
+    /// Merchant configuration (pause state, fee routing, etc.).
     MerchantConfig(Address),
-    /// Per-merchant, per-token accrued earnings record. Discriminant 17.
+    /// Per-merchant, per-token accrued earnings record.
     MerchantEarnings(Address, Address),
-    /// List of token addresses a merchant has earned in. Discriminant 18.
+    /// List of token addresses a merchant has earned in.
     MerchantTokens(Address),
-    /// Usage rate/cap limits for a subscription. Discriminant 19.
+    /// Usage rate/cap limits for a subscription.
     UsageLimits(u32),
-    /// Running usage state for a subscription within the current window. Discriminant 20.
+    /// Running usage state for a subscription within the current window.
     UsageState(u32),
-    /// Global grace period for underfunded subscriptions. Discriminant 21.
+    /// Global grace period for underfunded subscriptions.
     GracePeriod,
-    /// Protocol fee in basis points (0-10,000). Discriminant 22.
+    /// Protocol fee in basis points (0-10,000).
     FeeBps,
-    /// Treasury address for protocol fee collection. Discriminant 23.
+    /// Treasury address for protocol fee collection.
     Treasury,
-    /// List of all token addresses accepted by the vault. Discriminant 24.
+    /// List of all token addresses accepted by the vault.
     AcceptedTokens,
-    /// Decimals for a specific accepted token. Discriminant 25.
+    /// Decimals for a specific accepted token.
     TokenDecimals(Address),
-    /// Auto-incrementing plan-template ID counter. Discriminant 26.
+    /// Auto-incrementing plan-template ID counter.
     NextPlanId,
-    /// Plan template record keyed by its plan ID. Discriminant 27.
+    /// Plan template record keyed by its plan ID.
     Plan(u32),
-    /// Maps a subscription ID to its parent plan-template ID. Discriminant 28.
+    /// Maps a subscription ID to its parent plan-template ID.
     SubPlan(u32),
-    /// Max concurrent active subscriptions allowed for a plan. Discriminant 29.
+    /// Max concurrent active subscriptions allowed for a plan.
     PlanMaxActive(u32),
-    /// Per-subscriber, per-token credit limit. Discriminant 30.
+    /// Per-subscriber, per-token credit limit.
     CreditLimit(Address, Address),
-    /// Maps a token address to its list of subscription IDs. Discriminant 31.
-    TokenSubs(Address), // Test comment
-    /// Maps (merchant, token) to their accumulated balance. Discriminant 32.
+    /// Maps a token address to its list of subscription IDs.
+    TokenSubs(Address),
+    /// Maps (merchant, token) to their accumulated balance.
     MerchantBalance(Address, Address),
-    /// Maps a subscriber address to their blocklist status. Discriminant 33.
+    /// Maps a subscriber address to their blocklist status.
     Blocklist(Address),
+    /// Oracle configuration.
     Oracle,
+    /// Billing period snapshot storage.
+    BillingPeriodSnapshot(u32, u64),
+    /// Index for billing period snapshots.
+    BillingPeriodSnapshotIndex(u32),
     /// Period-end billing snapshot keyed by (subscription_id, period_index).
     BillingPeriodSnapshot(u32, u64),
     /// Secondary index of period snapshot refs for a subscription.
@@ -182,6 +204,37 @@ pub enum UsageChargeResult {
     BurstLimitExceeded = 2,
     RateLimitExceeded = 3,
     UsageCapExceeded = 4,
+}
+
+/// Accumulated totals for a merchant's earnings.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AccruedTotals {
+    pub interval: i128,
+    pub usage: i128,
+    pub one_off: i128,
+}
+
+/// Per-merchant, per-token earnings tracking.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TokenEarnings {
+    pub accruals: AccruedTotals,
+    pub withdrawals: i128,
+    pub refunds: i128,
+}
+
+/// Reconciliation snapshot for a token.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TokenReconciliationSnapshot {
+    pub token: Address,
+    pub total_accruals: i128,
+    pub total_withdrawals: i128,
+    pub total_refunds: i128,
+    pub computed_balance: i128,
+    pub stored_balance: i128,
+    pub matches: bool,
 }
 
 /// Represents the lifecycle state of a subscription.
@@ -332,6 +385,10 @@ pub enum Error {
     MetadataValueTooLong = 3006,
     /// Oracle returned a non-positive price.
     OraclePriceInvalid = 3007,
+    /// Cannot change usage mode after subscription creation.
+    CannotChangeUsageMode = 3008,
+    /// Invalid token decimals provided.
+    InvalidTokenDecimals = 3009,
 
     // --- State Transition (4000-4099) ---
     /// The requested state transition is not allowed by the state machine.
@@ -396,6 +453,14 @@ pub enum Error {
     BurstLimitExceeded = 6010,
 
     // --- Merchant Config (7000-7099) ---
+    /// Fee basis points exceed maximum allowed value.
+    InvalidFeeBips = 7001,
+    /// Invalid allowed operations bitmask.
+    InvalidOperations = 7002,
+    /// Charge operation must be allowed for merchant.
+    MustAllowChargeOperation = 7003,
+    /// Invalid or unsupported token address.
+    InvalidToken = 7004,
     /// Fee basis points exceed the maximum allowed (10,000).
     InvalidFeeBips = 7001,
     /// Invalid allowed operations bitmap for merchant config.
@@ -1357,6 +1422,76 @@ pub struct ProtocolFeeConfiguredEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when merchant config is initialized.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantConfigInitializedEvent {
+    pub merchant: Address,
+    pub payout_address: Address,
+    pub fee_bips: i32,
+    pub allowed_operations: i32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when merchant config is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantConfigUpdatedEvent {
+    pub merchant: Address,
+    pub payout_address: Address,
+    pub fee_bips: i32,
+    pub allowed_operations: i32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a protocol fee is charged.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeeChargedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub token: Address,
+    pub fee_amount: i128,
+    pub treasury: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when a plan template is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlanTemplateCreatedEvent {
+    pub plan_id: u32,
+    pub admin: Address,
+    pub interval: u64,
+    pub amount: i128,
+    pub usage_enabled: bool,
+    pub timestamp: u64,
+}
+
+/// Event emitted when global cap default is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct GlobalCapDefaultUpdatedEvent {
+    pub admin: Address,
+    pub cap: i128,
+    pub timestamp: u64,
+}
+
+/// Event emitted when lifetime cap is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LifetimeCapUpdatedEvent {
+    pub admin: Address,
+    pub cap: i128,
+    pub timestamp: u64,
+}
+
+/// Event emitted when merchant cap default is updated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MerchantCapDefaultUpdatedEvent {
+    pub admin: Address,
+    pub cap: i128,
 /// Event emitted when a protocol fee is charged during a subscription billing.
 #[contracttype]
 #[derive(Clone, Debug)]

@@ -32,7 +32,7 @@
 
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
-use crate::state_machine::validate_status_transition;
+use crate::state_machine::transition_to;
 use crate::subscription::next_charge_time;
 use crate::statements::append_statement;
 use crate::types::{
@@ -65,8 +65,7 @@ pub fn charge_one(
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
@@ -84,8 +83,7 @@ pub fn charge_one(
     if let Some(cap) = sub.lifetime_cap {
         if sub.lifetime_charged >= cap {
             if sub.status != SubscriptionStatus::Cancelled {
-                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-                sub.status = SubscriptionStatus::Cancelled;
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
                 env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
                 env.events().publish(
                     (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
@@ -153,8 +151,7 @@ pub fn charge_one(
         if remaining == 0 || charge_amount > remaining {
             // Cap already exhausted or this charge would exceed it: cancel without
             // moving funds and return an explicit terminal error.
-            validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-            sub.status = SubscriptionStatus::Cancelled;
+            transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
             env.events().publish(
@@ -209,9 +206,10 @@ pub fn charge_one(
                         (Symbol::new(env, "protocol_fee_charged"), subscription_id),
                         crate::types::ProtocolFeeChargedEvent {
                             subscription_id,
-                            treasury: treasury.clone(),
+                            merchant: sub.merchant.clone(),
+                            token: sub.token.clone(),
                             fee_amount,
-                            merchant_amount,
+                            treasury: treasury.clone(),
                             timestamp: now,
                         },
                     );
@@ -223,8 +221,7 @@ pub fn charge_one(
 
             // Recover from grace period or insufficient balance on successful charge
             if sub.status == SubscriptionStatus::GracePeriod || sub.status == SubscriptionStatus::InsufficientBalance {
-                validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
-                sub.status = SubscriptionStatus::Active;
+                transition_to(&mut sub.status, SubscriptionStatus::Active)?;
             }
 
             // Check if cap is now exactly reached -- auto-cancel
@@ -234,8 +231,7 @@ pub fn charge_one(
                 .unwrap_or(false);
 
             if cap_reached {
-                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-                sub.status = SubscriptionStatus::Cancelled;
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
             }
 
             storage.set(&DataKey::Sub(subscription_id), &sub);
@@ -318,8 +314,7 @@ pub fn charge_one(
             };
 
             if sub.status != target_status {
-                validate_status_transition(&sub.status, &target_status)?;
-                sub.status = target_status.clone();
+                transition_to(&mut sub.status, target_status.clone())?;
             }
 
             storage.set(&DataKey::Sub(subscription_id), &sub);
@@ -366,8 +361,7 @@ pub fn charge_usage_one(
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
@@ -383,8 +377,7 @@ pub fn charge_usage_one(
     if let Some(cap) = sub.lifetime_cap {
         if sub.lifetime_charged >= cap {
             if sub.status != SubscriptionStatus::Cancelled {
-                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-                sub.status = SubscriptionStatus::Cancelled;
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
                 env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
                 env.events().publish(
                     (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
@@ -549,8 +542,7 @@ pub fn charge_usage_one(
     let pending_lifetime = safe_add(sub.lifetime_charged, usage_amount)?;
     if let Some(cap) = sub.lifetime_cap {
         if pending_lifetime > cap {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-            sub.status = SubscriptionStatus::Cancelled;
+            transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
@@ -583,12 +575,10 @@ pub fn charge_usage_one(
                 .unwrap_or(false);
 
             if cap_reached {
-                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-                sub.status = SubscriptionStatus::Cancelled;
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
             } else if new_balance == 0 {
                 // Without a cap hit, zero remaining prepaid means underfunded for future usage.
-                validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
-                sub.status = SubscriptionStatus::InsufficientBalance;
+                transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
             }
 
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
@@ -632,8 +622,7 @@ pub fn charge_usage_one(
             Ok(UsageChargeResult::Charged)
         }
         Err(_) => {
-            validate_status_transition(&sub.status, &SubscriptionStatus::InsufficientBalance)?;
-            sub.status = SubscriptionStatus::InsufficientBalance;
+            transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
             env.events().publish(
