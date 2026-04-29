@@ -190,17 +190,12 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
     out
 }
 
-pub fn do_batch_charge(
-    env: &Env,
-    subscription_ids: &Vec<u32>,
-    nonce: u64,
-) -> Result<Vec<BatchChargeResult>, Error> {
-    let admin = require_stored_admin_auth(env)?;
-
-    // Nonce check must run before any state mutation to prevent replay.
-    // Domain DOMAIN_BATCH_CHARGE separates this counter from other admin ops.
-    crate::nonce::check_and_advance(env, &admin, crate::nonce::DOMAIN_BATCH_CHARGE, nonce)?;
-
+/// Execute the core batch-charge loop without any auth or nonce checks.
+///
+/// Called by both `do_batch_charge` (admin path) and
+/// `operator::do_operator_batch_charge` (operator path) after their respective
+/// auth/nonce guards have been satisfied.
+pub(crate) fn execute_batch_charge(env: &Env, subscription_ids: &Vec<u32>) -> Vec<BatchChargeResult> {
     let now = env.ledger().timestamp();
     let mut results = Vec::new(env);
     for id in subscription_ids.iter() {
@@ -225,7 +220,21 @@ pub fn do_batch_charge(
         };
         results.push_back(res);
     }
-    Ok(results)
+    results
+}
+
+pub fn do_batch_charge(
+    env: &Env,
+    subscription_ids: &Vec<u32>,
+    nonce: u64,
+) -> Result<Vec<BatchChargeResult>, Error> {
+    let admin = require_stored_admin_auth(env)?;
+
+    // Nonce check must run before any state mutation to prevent replay.
+    // Domain DOMAIN_BATCH_CHARGE separates this counter from other admin ops.
+    crate::nonce::check_and_advance(env, &admin, crate::nonce::DOMAIN_BATCH_CHARGE, nonce)?;
+
+    Ok(execute_batch_charge(env, subscription_ids))
 }
 
 /// Performs a single interval-based charge. Admin only.
@@ -248,6 +257,7 @@ pub fn do_charge_usage(
 ) -> Result<(), Error> {
     let _admin = require_stored_admin_auth(env)?;
 
+    charge_usage_one(env, subscription_id, usage_amount, reference).map(|_| ())
     charge_usage_one(env, subscription_id, usage_amount, reference)?;
     Ok(())
 }
@@ -376,6 +386,8 @@ pub fn set_protocol_fee(
     env.events().publish(
         (Symbol::new(env, "protocol_fee_configured"),),
         crate::types::ProtocolFeeConfiguredEvent {
+            admin: admin.clone(),
+            treasury: treasury.clone(),
             admin,
             treasury,
             fee_bps,

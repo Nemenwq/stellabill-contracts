@@ -39,13 +39,15 @@
 
 use crate::queries::get_subscription;
 use crate::safe_math::{safe_add, safe_add_balance, safe_sub, validate_non_negative};
-use crate::state_machine::validate_status_transition;
+use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
     BillingChargeKind, DataKey, Error, FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent,
     PlanTemplate, PlanTemplateUpdatedEvent, SubscriberWithdrawalEvent,
+    Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
+    SubscriptionRecoveryReadyEvent, SubscriptionResumedEvent, SubscriptionPausedEvent,
     Subscription, SubscriptionCancelledEvent, SubscriptionCreatedEvent,
     SubscriptionMigratedEvent, SubscriptionRecoveryReadyEvent,
     SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
@@ -475,8 +477,7 @@ pub fn do_deposit_funds(
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
@@ -571,9 +572,8 @@ pub fn do_cancel_subscription(
         return Err(Error::Forbidden);
     }
 
-    validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
+    transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
     let refund_amount = sub.prepaid_balance;
-    sub.status = SubscriptionStatus::Cancelled;
 
     env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
@@ -622,14 +622,13 @@ pub fn do_pause_subscription(
         return Err(Error::Forbidden);
     }
 
-    validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;
-
     // Idempotent: already paused — nothing to do, no event.
     if sub.status == SubscriptionStatus::Paused {
         return Ok(());
     }
 
-    sub.status = SubscriptionStatus::Paused;
+    transition_to(&mut sub.status, SubscriptionStatus::Paused)?;
+
     env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
     env.events().publish(
@@ -677,8 +676,6 @@ pub fn do_resume_subscription(
         crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
-    validate_status_transition(&sub.status, &SubscriptionStatus::Active)?;
-
     // Idempotent: already active — nothing to do, no event.
     if sub.status == SubscriptionStatus::Active {
         return Ok(());
@@ -689,6 +686,8 @@ pub fn do_resume_subscription(
     {
         return Err(Error::InsufficientBalance);
     }
+
+    transition_to(&mut sub.status, SubscriptionStatus::Active)?;
 
     let previous_status = sub.status;
     sub.status = SubscriptionStatus::Active;
@@ -726,8 +725,7 @@ pub fn do_charge_one_off(
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "subscription_expired"), subscription_id),
@@ -746,8 +744,7 @@ pub fn do_charge_one_off(
     if let Some(cap) = sub.lifetime_cap {
         if sub.lifetime_charged >= cap {
             if sub.status != SubscriptionStatus::Cancelled {
-                validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-                sub.status = SubscriptionStatus::Cancelled;
+                transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
                 env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
                 env.events().publish(
                     (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
@@ -776,8 +773,7 @@ pub fn do_charge_one_off(
     let new_charged = safe_add(sub.lifetime_charged, amount)?;
     if let Some(cap) = sub.lifetime_cap {
         if new_charged > cap {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-            sub.status = SubscriptionStatus::Cancelled;
+            transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
             env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
             env.events().publish(
                 (Symbol::new(env, "lifetime_cap_reached"), subscription_id),
@@ -808,8 +804,7 @@ pub fn do_charge_one_off(
     )?;
 
     if cap_reached {
-        validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
-        sub.status = SubscriptionStatus::Cancelled;
+        transition_to(&mut sub.status, SubscriptionStatus::Cancelled)?;
         
         if let Some(cap) = sub.lifetime_cap {
             env.events().publish(
@@ -874,12 +869,10 @@ pub fn do_cleanup_subscription(
             && sub.status != SubscriptionStatus::Expired
             && sub.is_expired(now)
         {
-            validate_status_transition(&sub.status, &SubscriptionStatus::Expired)?;
-            sub.status = SubscriptionStatus::Expired;
+            transition_to(&mut sub.status, SubscriptionStatus::Expired)?;
         }
 
-        validate_status_transition(&sub.status, &SubscriptionStatus::Archived)?;
-        sub.status = SubscriptionStatus::Archived;
+        transition_to(&mut sub.status, SubscriptionStatus::Archived)?;
         env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
         
         env.events().publish(
@@ -910,11 +903,6 @@ pub fn do_withdraw_subscriber_funds(
 
     if subscriber != sub.subscriber {
         return Err(Error::Forbidden);
-    }
-
-    let amount_to_refund = sub.prepaid_balance;
-    if amount_to_refund <= 0 {
-        return Err(Error::InvalidAmount);
     }
 
     if sub.status != SubscriptionStatus::Cancelled
@@ -1082,8 +1070,7 @@ pub fn do_set_global_cap_default(
         (Symbol::new(env, "global_cap_set"),),
         GlobalCapDefaultUpdatedEvent {
             admin,
-            old_default,
-            new_default: cap,
+            cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1113,9 +1100,8 @@ pub fn do_set_merchant_cap_default(
     env.events().publish(
         (Symbol::new(env, "merchant_cap_set"), merchant.clone()),
         MerchantCapDefaultUpdatedEvent {
-            merchant,
-            old_default,
-            new_default: cap,
+            admin: merchant,
+            cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1147,14 +1133,16 @@ pub fn do_update_subscription_cap(
     }
 
     sub.lifetime_cap = new_cap;
-    env.storage().instance().set(&subscription_id, &sub);
+    env.storage().instance().set(&DataKey::Sub(subscription_id), &sub);
 
+    // Get admin address for event, fallback to a zero-address if not set
+    let admin_addr = env.storage().instance().get(&DataKey::Admin).unwrap_or(sub.merchant.clone());
+    
     env.events().publish(
         (Symbol::new(env, "cap_updated"), subscription_id),
         LifetimeCapUpdatedEvent {
-            subscription_id,
-            old_cap,
-            new_cap,
+            admin: admin_addr,
+            cap: new_cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1204,13 +1192,11 @@ pub fn do_create_plan_template(
     env.events().publish(
         (Symbol::new(env, "plan_created"), plan_id),
         crate::types::PlanTemplateCreatedEvent {
-            plan_template_id: plan_id,
-            merchant,
-            token,
+            plan_id,
+            admin: merchant.clone(),
+            interval: interval_seconds,
             amount,
-            interval_seconds,
             usage_enabled,
-            lifetime_cap,
             timestamp: env.ledger().timestamp(),
         },
     );
@@ -1257,13 +1243,11 @@ pub fn do_create_plan_template_with_token(
     env.events().publish(
         (Symbol::new(env, "plan_created"), plan_id),
         crate::types::PlanTemplateCreatedEvent {
-            plan_template_id: plan_id,
-            merchant,
-            token,
+            plan_id,
+            admin: merchant.clone(),
+            interval: interval_seconds,
             amount,
-            interval_seconds,
             usage_enabled,
-            lifetime_cap,
             timestamp: env.ledger().timestamp(),
         },
     );

@@ -23,6 +23,9 @@
 use crate::safe_math::{safe_add, safe_sub, validate_non_negative};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantConfig, MerchantConfigInitializedEvent,
+    MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent, MerchantWithdrawalEvent,
+    TokenEarnings, TokenReconciliationSnapshot, MAX_FEE_BIPS, is_valid_allowed_operations,
+    OP_CHARGE,
     MerchantConfigUpdatedEvent, MerchantPausedEvent, MerchantUnpausedEvent,
     MerchantWithdrawalEvent, TokenEarnings, TokenReconciliationSnapshot,
     is_valid_allowed_operations, MAX_FEE_BIPS, OP_CHARGE,
@@ -164,7 +167,6 @@ pub fn set_merchant_config(
             payout_address: updated_config.payout_address.clone(),
             fee_bips: updated_config.fee_bips,
             allowed_operations: updated_config.allowed_operations,
-            is_active: updated_config.is_active,
             timestamp,
         },
     );
@@ -175,6 +177,24 @@ pub fn set_merchant_config(
 pub fn get_merchant_config(env: &Env, merchant: Address) -> Option<MerchantConfig> {
     let key = DataKey::MerchantConfig(merchant);
     env.storage().instance().get(&key)
+}
+
+/// Updates merchant configuration. Returns the updated config.
+///
+/// Note: This is a stub implementation. Full implementation pending.
+pub fn update_merchant_config(
+    _env: &Env,
+    _merchant: Address,
+    _new_payout_address: Option<Address>,
+    _new_fee_bips: Option<i32>,
+    _new_allowed_operations: Option<i32>,
+    _new_is_active: Option<bool>,
+    _new_fee_address: Option<Option<Address>>,
+    _new_redirect_url: Option<soroban_sdk::String>,
+    _new_is_paused: Option<bool>,
+) -> Result<MerchantConfig, crate::types::Error> {
+    // TODO: Implement full merchant config update logic
+    Err(crate::types::Error::NotInitialized)
 }
 
 fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
@@ -258,6 +278,8 @@ pub fn get_reconciliation_snapshot(
             total_withdrawals: earnings.withdrawals,
             total_refunds: earnings.refunds,
             computed_balance,
+            stored_balance: 0, // Will be computed by caller
+            matches: computed_balance == 0, // Placeholder
         });
     }
     result
@@ -349,6 +371,7 @@ pub fn withdraw_merchant_funds_for_token(
     amount: i128,
 ) -> Result<(), Error> {
     merchant.require_auth();
+    crate::blocklist::require_not_blocklisted(env, &merchant)?;
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }
@@ -376,9 +399,19 @@ pub fn withdraw_merchant_funds_for_token(
     // EFFECTS: Update internal state before external interactions (CEI pattern)
     // ──────────────────────────────────────────────────────────────────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
+
+    // Keep TokenEarnings.withdrawals in sync so the reconciliation invariant holds:
+    // balance = accruals - withdrawals - refunds
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.withdrawals = earnings
+        .withdrawals
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     env.events().publish(
-        (Symbol::new(env, "withdrawn"), merchant.clone()),
+        (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
@@ -419,7 +452,7 @@ pub fn merchant_refund(
         return Err(Error::InsufficientBalance);
     }
 
-    let new_balance = current.checked_sub(amount).ok_or(Error::Overflow)?;
+    let new_balance = current.checked_sub(amount).ok_or(Error::Underflow)?;
 
     // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
@@ -431,6 +464,9 @@ pub fn merchant_refund(
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
 
+    // Funds leave vault custody — keep TotalAccounted consistent.
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
+
     env.events().publish(
         (Symbol::new(env, "merchant_refund"), merchant.clone()),
         crate::types::MerchantRefundEvent {
@@ -438,7 +474,6 @@ pub fn merchant_refund(
             subscriber: subscriber.clone(),
             token: token_addr.clone(),
             amount,
-            timestamp: env.ledger().timestamp(),
         },
     );
 
