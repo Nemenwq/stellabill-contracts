@@ -171,7 +171,7 @@ impl FuzzHarness {
             Operation::RotateAdmin => {
                 std::format!(
                     "{:?}",
-                    self.client.try_rotate_admin(&address, &self.new_admin)
+                    self.client.try_rotate_admin(&address, &self.new_admin, &0u64)
                 )
             }
             Operation::EnableEmergencyStop => {
@@ -370,7 +370,7 @@ impl FuzzHarness {
                 std::format!(
                     "{:?}",
                     self.client
-                        .try_batch_charge(&SorobanVec::from_array(env, [self.subscription_id]))
+                        .try_batch_charge(&SorobanVec::from_array(env, [self.subscription_id]), &0u64)
                 )
             }
             Operation::AddAcceptedToken => {
@@ -488,7 +488,7 @@ fn test_admin_rotation_edge_case() {
     let new_admin = harness.new_admin.clone();
 
     harness.env.mock_all_auths();
-    harness.client.rotate_admin(&old_admin, &new_admin);
+    harness.client.rotate_admin(&old_admin, &new_admin, &0u64);
 
     let res = harness.client.try_set_min_topup(&old_admin, &3_000_000);
     assert!(

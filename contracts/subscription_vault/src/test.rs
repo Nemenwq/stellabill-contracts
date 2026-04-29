@@ -1640,7 +1640,7 @@ fn test_batch_charge_large_batch() {
     }
 
     env.ledger().set_timestamp(T0 + INTERVAL + 1);
-    let results = client.batch_charge(&ids);
+    let results = client.batch_charge(&ids, &0u64);
     assert_eq!(results.len(), BATCH_SIZE);
     for i in 0..BATCH_SIZE {
         assert!(results.get(i).unwrap().success);
@@ -6569,7 +6569,7 @@ fn test_batch_charge_with_paused_and_cancelled() {
     test_env.jump(INTERVAL + 1);
 
     let ids = soroban_sdk::Vec::from_array(&test_env.env, [id_active, id_paused, id_cancelled]);
-    let results = test_env.client.batch_charge(&ids);
+    let results = test_env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 3);
     assert!(results.get(0).unwrap().success, "active must succeed");
