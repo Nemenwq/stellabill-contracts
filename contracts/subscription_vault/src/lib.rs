@@ -126,7 +126,11 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
-pub use queries::{compute_next_charge_info, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE};
+pub use queries::{
+    compute_next_charge_info, generate_reconciliation_proof, get_contract_reconciliation_summary,
+    get_token_reconciliation, query_prepaid_balances_paginated, MAX_PREPAID_SCAN_DEPTH, MAX_SCAN_DEPTH,
+    MAX_SUBSCRIPTION_LIST_PAGE, MAX_TOKEN_SUMMARIES_PER_PAGE,
+};
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminRotatedEvent, BatchChargeResult, BatchWithdrawResult,
@@ -151,6 +155,8 @@ pub use types::{
     DEFAULT_ALLOWED_OPS, OP_CHARGE, OP_WITHDRAW, OP_REFUND,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
     UsageChargeResult,
+    PrepaidQueryRequest, PrepaidQueryResult, ReconciliationProof, ReconciliationSummaryPage,
+    TokenLiabilities,
 };
 
 /// Maximum subscription ID this contract will ever allocate.
@@ -1772,6 +1778,145 @@ impl SubscriptionVault {
         limit: u32,
     ) -> Result<Vec<Subscription>, Error> {
         queries::get_subscriptions_by_token(&env, token, start, limit)
+    }
+
+    // ── Reconciliation Queries ─────────────────────────────────────────────────
+
+    /// Returns complete reconciliation data for a single settlement token.
+    ///
+    /// This computes the accounting equation:
+    /// `contract_token_balance = total_prepaid + total_merchant_liabilities + recoverable`
+    ///
+    /// # Arguments
+    ///
+    /// * `token` — The settlement token to audit.
+    ///
+    /// # Returns
+    ///
+    /// A [`TokenLiabilities`] struct containing:
+    /// - `total_prepaid`: Sum of all subscriber prepaid balances
+    /// - `total_merchant_liabilities`: Sum of all merchant earnings (accruals - withdrawals - refunds)
+    /// - `recoverable_amount`: Stranded funds that can be recovered
+    /// - `contract_balance`: Actual token balance held by the contract
+    /// - `is_balanced`: Whether the accounting equation validates
+    ///
+    /// # Auth
+    ///
+    /// Read-only; no auth required.
+    ///
+    /// # Complexity
+    ///
+    /// This scans all subscriptions and merchants. For bounded compute with
+    /// pagination, use [`query_prepaid_balances_paginated`](Self::query_prepaid_balances_paginated).
+    pub fn get_token_reconciliation(env: Env, token: Address) -> TokenLiabilities {
+        queries::get_token_reconciliation(&env, token)
+    }
+
+    /// Returns paginated reconciliation summaries for all accepted tokens.
+    ///
+    /// # Arguments
+    ///
+    /// * `start_token_index` — Index into the accepted tokens list to start from (0 for first page).
+    /// * `limit` — Maximum number of token summaries to return (max 50).
+    ///
+    /// # Returns
+    ///
+    /// A [`ReconciliationSummaryPage`] with per-token liability summaries and pagination cursor.
+    ///
+    /// # Auth
+    ///
+    /// Read-only; no auth required.
+    ///
+    /// # Example
+    ///
+    /// To get all token reconciliations:
+    /// 1. Call with `start_token_index = 0`, `limit = 50`
+    /// 2. If `next_token_index` is `Some(index)`, call again with that index
+    /// 3. Repeat until `next_token_index` is `None`
+    pub fn get_recon_summary(
+        env: Env,
+        start_token_index: u32,
+        limit: u32,
+    ) -> ReconciliationSummaryPage {
+        queries::get_contract_reconciliation_summary(&env, start_token_index, limit)
+    }
+
+    /// Generates an auditable proof for off-chain reconciliation verification.
+    ///
+    /// Creates a snapshot with all data needed to independently validate the accounting
+    /// equation without requiring full contract state access.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` — The settlement token to generate the proof for.
+    ///
+    /// # Returns
+    ///
+    /// A [`ReconciliationProof`] containing:
+    /// - Timestamp and ledger sequence for temporal anchoring
+    /// - Contract balance, prepaid total, merchant liabilities
+    /// - Computed recoverable amount
+    /// - Subscription and merchant counts scanned
+    /// - Validation flag (`is_valid`)
+    ///
+    /// # Auth
+    ///
+    /// Read-only; no auth required.
+    ///
+    /// # Security
+    ///
+    /// This function is read-only and cannot modify state. The proof is generated
+    /// at the current ledger state and includes the ledger sequence for verification.
+    pub fn generate_reconciliation_proof(env: Env, token: Address) -> ReconciliationProof {
+        queries::generate_reconciliation_proof(&env, token)
+    }
+
+    /// Returns paginated prepaid balance aggregation for a token.
+    ///
+    /// Provides bounded compute for auditors to incrementally build the total
+    /// prepaid balance without iterating unbounded subscription sets.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` — A [`PrepaidQueryRequest`] with:
+    ///   - `token`: Token to filter by
+    ///   - `start_subscription_id`: Starting subscription ID (inclusive)
+    ///   - `scan_limit`: Max subscriptions to scan (capped at 500)
+    ///
+    /// # Returns
+    ///
+    /// A [`PrepaidQueryResult`] with:
+    /// - `partial_total`: Sum of prepaid balances in this scan window
+    /// - `subscriptions_count`: Number of subscriptions with non-zero prepaid
+    /// - `next_start_id`: Next ID to scan, or `None` if complete
+    /// - `has_more`: Whether more subscriptions exist beyond this window
+    ///
+    /// # Auth
+    ///
+    /// Read-only; no auth required.
+    ///
+    /// # Example
+    ///
+    /// To compute full prepaid total off-chain:
+    /// ```
+    /// let mut total = 0i128;
+    /// let mut start_id = 0u32;
+    /// loop {
+    ///     let result = query_prepaid_balances_paginated(env, PrepaidQueryRequest {
+    ///         token: usdc_token,
+    ///         start_subscription_id: start_id,
+    ///         scan_limit: 500,
+    ///     });
+    ///     total += result.partial_total;
+    ///     if !result.has_more { break; }
+    ///     start_id = result.next_start_id.unwrap();
+    /// }
+    /// ```
+    pub fn query_prepaid_balances_paginated(
+        env: Env,
+        request: PrepaidQueryRequest,
+    ) -> PrepaidQueryResult {
+        queries::query_prepaid_balances_paginated(&env, request)
     }
 
     /// Configure the number of detailed billing statement rows retained per subscription.

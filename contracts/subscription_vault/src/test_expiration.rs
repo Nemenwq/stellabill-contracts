@@ -117,13 +117,6 @@ fn test_cleanup_and_archival() {
         &Some(T0 + INTERVAL),
     );
 
-// doc 3: deposit_funds rejected when expired
-#[test]
-fn test_deposit_rejected_when_expired() {
-    let (env, client, token, token_admin, _) = setup_test_env();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
     // Try cleanup before expiry — should fail
     let res = client.try_cleanup_subscription(&sub_id, &subscriber);
     assert!(res.is_err(), "cleanup before expiry should fail");
@@ -132,29 +125,17 @@ fn test_deposit_rejected_when_expired() {
     env.ledger().with_mut(|l| l.timestamp = T0 + 2 * INTERVAL);
     let _ = client.try_charge_subscription(&sub_id); // transitions to Expired
 
-// doc 3: cancel_subscription rejected when expired ("mutually exclusive in behavior")
-#[test]
-fn test_cancel_rejected_when_expired() {
-    let (env, client, token, token_admin, _) = setup_test_env();
-    let subscriber = Address::generate(&env);
-    let merchant = Address::generate(&env);
+    // Perform cleanup which archives the subscription
+    client.cleanup_subscription(&sub_id, &subscriber);
 
     let sub_archived = client.get_subscription(&sub_id);
     assert_eq!(sub_archived.status, SubscriptionStatus::Archived);
-    assert_eq!(sub_archived.amount, amount);
-
-    // Archival reads - can still read it
-    assert_eq!(sub_archived.amount, amount);
+    assert_eq!(sub_archived.amount, min_topup);
 
     // Ensure funds can be withdrawn (already done by cleanup_subscription in some impls,
     // or via explicit withdraw)
-    let _deposit_balance = (min_topup * 5) - 0; // no charges made before expiry
     let sub_balance = sub_archived.prepaid_balance;
-    if sub_balance > 0 {
-        let initial_balance = token_client.balance(&subscriber);
-        client.withdraw_subscriber_funds(&sub_id, &subscriber);
-        assert!(token_client.balance(&subscriber) > initial_balance);
-    }
+    assert_eq!(sub_balance, 0, "Funds should have been returned during cleanup");
 }
 
 // doc 2, 4, Flow 2: cancel before expiry -> Cancelled -> Archived;
@@ -236,7 +217,7 @@ fn test_expiration_vs_cancellation() {
     assert_eq!(client.get_subscription(&sub_id2).status, SubscriptionStatus::Archived);
 }
 
-// doc 1: None expires_at means subscription runs indefinitely
+// doc 3: deposit_funds rejected when expired
 #[test]
 fn test_deposit_rejected_when_expired() {
     let (env, client, token_client, token_admin, _) = setup_test_env();

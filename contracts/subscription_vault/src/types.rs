@@ -127,6 +127,8 @@ pub enum DataKey {
     BillingPeriodSnapshot(u32, u64),
     /// Secondary index of period snapshot refs for a subscription.
     BillingPeriodSnapshotIndex(u32),
+    /// Admin nonce for replay protection keyed by (admin_address, domain).
+    AdminNonce(Address, u32),
 }
 
 /// Accrued totals by charge kind.
@@ -302,6 +304,8 @@ pub enum Error {
     SubscriberBlocklisted = 1003,
     /// Rotation to the same admin address is not allowed.
     SelfRotation = 1004,
+    /// Nonce has already been used for this signer and domain.
+    NonceAlreadyUsed = 1005,
 
     // --- Not Found (2000-2099) ---
     /// The requested resource was not found in storage.
@@ -1394,4 +1398,94 @@ pub struct LifetimeCapUpdatedEvent {
     pub old_cap: Option<i128>,
     pub new_cap: Option<i128>,
     pub timestamp: u64,
+}
+
+/// Summary of all liabilities for a single settlement token.
+///
+/// Used by auditors to validate the accounting equation:
+/// `contract_token_balance = total_prepaid + total_merchant_liabilities + recoverable`
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenLiabilities {
+    /// Token contract address.
+    pub token: Address,
+    /// Sum of all subscriber prepaid balances in subscriptions using this token.
+    pub total_prepaid: i128,
+    /// Sum of all merchant earnings (accruals - withdrawals - refunds) for this token.
+    pub total_merchant_liabilities: i128,
+    /// Amount that can be recovered (stranded funds).
+    pub recoverable_amount: i128,
+    /// Contract's actual token balance at query time.
+    pub contract_balance: i128,
+    /// Computed total: prepaid + merchant liabilities + recoverable.
+    pub computed_total: i128,
+    /// Whether the accounting equation balances (contract_balance == computed_total).
+    pub is_balanced: bool,
+}
+
+/// Paginated result for reconciliation queries across all tokens.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationSummaryPage {
+    /// Per-token liability summaries.
+    pub token_summaries: Vec<TokenLiabilities>,
+    /// Cursor for next page if more tokens exist. `None` when complete.
+    pub next_token_index: Option<u32>,
+}
+
+/// Proof structure for auditors to validate accounting off-chain.
+///
+/// Contains all data needed to independently verify the accounting equation
+/// without requiring full contract state access.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationProof {
+    /// Timestamp when the proof was generated.
+    pub timestamp: u64,
+    /// Ledger sequence at proof generation.
+    pub ledger_sequence: u32,
+    /// Token being audited.
+    pub token: Address,
+    /// Contract's token balance at query time.
+    pub contract_balance: i128,
+    /// Total prepaid balances across all subscriptions for this token.
+    pub total_prepaid: i128,
+    /// Total merchant earnings liabilities for this token.
+    pub total_merchant_liabilities: i128,
+    /// Computed recoverable amount (contract_balance - prepaid - merchant_liabilities).
+    pub computed_recoverable: i128,
+    /// Number of subscriptions scanned for the prepaid total.
+    pub subscription_count: u32,
+    /// Number of merchants scanned for the earnings total.
+    pub merchant_count: u32,
+    /// Whether the accounting equation validates.
+    pub is_valid: bool,
+}
+
+/// Request for paginated prepaid balance aggregation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrepaidQueryRequest {
+    /// Token to filter by (required).
+    pub token: Address,
+    /// Starting subscription ID for pagination (inclusive).
+    pub start_subscription_id: u32,
+    /// Maximum number of subscriptions to scan in this call.
+    pub scan_limit: u32,
+}
+
+/// Result of a paginated prepaid balance query.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrepaidQueryResult {
+    /// Token that was queried.
+    pub token: Address,
+    /// Sum of prepaid balances found in this scan window.
+    pub partial_total: i128,
+    /// Number of subscriptions with non-zero prepaid balances found.
+    pub subscriptions_count: u32,
+    /// Next subscription ID to scan, or `None` if complete.
+    pub next_start_id: Option<u32>,
+    /// Whether more subscriptions may exist beyond this scan window.
+    pub has_more: bool,
 }
