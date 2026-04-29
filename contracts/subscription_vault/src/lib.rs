@@ -128,6 +128,8 @@ mod test_operator;
 mod test_replay_protection;
 #[cfg(test)]
 mod test_blocklist_enforcement;
+#[cfg(test)]
+mod test_merchant_earnings;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
@@ -1607,6 +1609,19 @@ impl SubscriptionVault {
     /// Token-scoped merchant balance.
     pub fn get_merchant_balance_by_token(env: Env, merchant: Address, token: Address) -> i128 {
         merchant::get_merchant_balance_by_token(&env, &merchant, &token)
+    }
+
+    /// Detailed per-token earnings record for a merchant.
+    ///
+    /// Returns the [`TokenEarnings`] struct containing accruals (broken down by
+    /// charge kind), withdrawals, and refunds. The reconciliation invariant
+    /// `balance = accruals.total - withdrawals - refunds` must hold at all times.
+    pub fn get_merchant_token_earnings(
+        env: Env,
+        merchant: Address,
+        token: Address,
+    ) -> crate::types::TokenEarnings {
+        merchant::get_merchant_token_earnings(&env, &merchant, &token)
     }
 
     /// Check if a merchant has enabled a blanket pause.

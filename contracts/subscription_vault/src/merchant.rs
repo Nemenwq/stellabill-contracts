@@ -377,9 +377,19 @@ pub fn withdraw_merchant_funds_for_token(
     // EFFECTS: Update internal state before external interactions (CEI pattern)
     // ──────────────────────────────────────────────────────────────────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
+
+    // Keep TokenEarnings.withdrawals in sync so the reconciliation invariant holds:
+    // balance = accruals - withdrawals - refunds
+    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    earnings.withdrawals = earnings
+        .withdrawals
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
+    set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
     env.events().publish(
-        (Symbol::new(env, "withdrawn"), merchant.clone()),
+        (Symbol::new(env, "withdrawn"), merchant.clone(), token_addr.clone()),
         MerchantWithdrawalEvent {
             merchant: merchant.clone(),
             token: token_addr.clone(),
@@ -420,7 +430,7 @@ pub fn merchant_refund(
         return Err(Error::InsufficientBalance);
     }
 
-    let new_balance = current.checked_sub(amount).ok_or(Error::Overflow)?;
+    let new_balance = current.checked_sub(amount).ok_or(Error::Underflow)?;
 
     // EFFECTS
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
@@ -431,6 +441,9 @@ pub fn merchant_refund(
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
+
+    // Funds leave vault custody — keep TotalAccounted consistent.
+    crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
     env.events().publish(
         (Symbol::new(env, "merchant_refund"), merchant.clone()),
