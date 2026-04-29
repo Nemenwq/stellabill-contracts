@@ -2,6 +2,7 @@
 
 use crate::{
     ChargeExecutionResult, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
+    UsageChargeResult,
 };
 use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{Address, Env, FromVal, String, Symbol, Val, Vec, symbol_short};
@@ -304,6 +305,13 @@ fn test_lifetime_cap_usage_overrun_cancels_without_financial_side_effects() {
         env.storage().instance().set(&crate::types::DataKey::Sub(sub_id), &sub);
     });
 
+    assert_eq!(
+        client.try_charge_usage_with_reference(
+            &sub_id,
+            &2i128,
+            &String::from_str(&env, "cap-overrun-usage"),
+        ),
+        Ok(Ok(UsageChargeResult::Charged))
     let usage_result = client.try_charge_usage_with_reference(
         &sub_id,
         &2i128,

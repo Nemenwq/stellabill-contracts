@@ -1,3 +1,4 @@
+use crate::types::{OP_WITHDRAW, OP_REFUND, OP_CHARGE};
 use crate::{SubscriptionVault, SubscriptionVaultClient};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
@@ -153,7 +154,7 @@ fn test_operations_without_charge_flag() {
         &merchant,
         &payout,
         &0,
-        &(crate::OP_WITHDRAW | crate::OP_REFUND),
+        &(OP_WITHDRAW | OP_REFUND),
         &None,
         &String::from_str(&env, ""),
     );
