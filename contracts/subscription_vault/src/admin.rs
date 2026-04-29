@@ -257,6 +257,7 @@ pub fn do_charge_usage(
 ) -> Result<(), Error> {
     let _admin = require_stored_admin_auth(env)?;
 
+    charge_usage_one(env, subscription_id, usage_amount, reference).map(|_| ())
     charge_usage_one(env, subscription_id, usage_amount, reference)?;
     Ok(())
 }
@@ -385,6 +386,8 @@ pub fn set_protocol_fee(
     env.events().publish(
         (Symbol::new(env, "protocol_fee_configured"),),
         crate::types::ProtocolFeeConfiguredEvent {
+            admin: admin.clone(),
+            treasury: treasury.clone(),
             admin,
             treasury,
             fee_bps,
