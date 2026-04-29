@@ -570,6 +570,11 @@ pub fn do_cancel_subscription(
         return Err(Error::Forbidden);
     }
 
+    // Blocklisted subscribers cannot self-cancel; merchant and admin may still cancel on their behalf.
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
+    }
+
     validate_status_transition(&sub.status, &SubscriptionStatus::Cancelled)?;
     let refund_amount = sub.prepaid_balance;
     sub.status = SubscriptionStatus::Cancelled;
@@ -619,6 +624,11 @@ pub fn do_pause_subscription(
 
     if authorizer != sub.subscriber && authorizer != sub.merchant {
         return Err(Error::Forbidden);
+    }
+
+    // Blocklisted subscribers cannot self-pause; merchant may still pause on their behalf.
+    if authorizer == sub.subscriber {
+        crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
     validate_status_transition(&sub.status, &SubscriptionStatus::Paused)?;

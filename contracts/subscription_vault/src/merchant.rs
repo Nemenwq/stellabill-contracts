@@ -349,6 +349,7 @@ pub fn withdraw_merchant_funds_for_token(
     amount: i128,
 ) -> Result<(), Error> {
     merchant.require_auth();
+    crate::blocklist::require_not_blocklisted(env, &merchant)?;
     if amount <= 0 {
         return Err(Error::InvalidAmount);
     }

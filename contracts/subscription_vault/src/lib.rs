@@ -126,6 +126,8 @@ mod test_billing_period_snapshots;
 mod test_operator;
 #[cfg(test)]
 mod test_replay_protection;
+#[cfg(test)]
+mod test_blocklist_enforcement;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
 
