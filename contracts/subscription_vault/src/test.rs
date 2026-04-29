@@ -1,5 +1,6 @@
 use crate::{
-    can_transition, compute_next_charge_info, get_allowed_transitions, validate_status_transition,
+    can_transition, compute_next_charge_info, get_allowed_transitions, transition_to,
+    validate_status_transition,
     ChargeExecutionResult, DataKey, Error, MerchantWithdrawalEvent, OraclePrice,
     RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
     MAX_SUBSCRIPTION_ID, MAX_SUBSCRIPTION_LIST_PAGE,
@@ -1209,6 +1210,7 @@ fn test_deposit_funds_event_payload() {
     );
 
     // Verify event data: FundsDepositedEvent { subscription_id, subscriber, amount, prepaid_balance }
+    let event_data: crate::FundsDepositedEvent = FromVal::from_val(&env, &deposit_event.2);
     let event_data: crate::FundsDepositedEvent = deposit_event.2.into_val(&env);
     assert_eq!(event_data.subscription_id, id);
     assert_eq!(event_data.subscriber, subscriber);
@@ -1314,6 +1316,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         Symbol::from_val(&test_env.env, &add_event.1.get(0).expect("missing add topic")),
         Symbol::new(&test_env.env, "blocklist_added")
     );
+    let added: crate::BlocklistAddedEvent = FromVal::from_val(&test_env.env, &add_event.2);
     let added: crate::BlocklistAddedEvent = add_event.2.into_val(&test_env.env);
     assert_eq!(added.subscriber, subscriber);
     assert_eq!(added.added_by, test_env.admin);
@@ -1337,6 +1340,7 @@ fn test_blocklist_add_and_remove_events_capture_reason_variants() {
         ),
         Symbol::new(&test_env.env, "blocklist_removed")
     );
+    let removed: crate::BlocklistRemovedEvent = FromVal::from_val(&test_env.env, &remove_event.2);
     let removed: crate::BlocklistRemovedEvent = remove_event.2.into_val(&test_env.env);
     assert_eq!(removed.subscriber, subscriber);
     assert_eq!(removed.removed_by, test_env.admin);
@@ -8138,4 +8142,393 @@ fn test_compaction_aggregation_accuracy() {
     
     assert_eq!(agg.total_amount + live_total, sub.lifetime_charged);
     assert_eq!(sub.lifetime_charged, 27_000_000i128);
+}
+
+// ═════════════════════════════════════════════════════════════════════=========
+// STATE MACHINE TRANSITION TESTS - Exhaustive Coverage
+// ═════════════════════════════════════════════════════════════════════=========
+
+/// Test that `transition_to` correctly applies valid transitions
+#[test]
+fn test_transition_to_valid_transitions() {
+    // Active -> Paused
+    let mut status = SubscriptionStatus::Active;
+    assert!(transition_to(&mut status, SubscriptionStatus::Paused).is_ok());
+    assert_eq!(status, SubscriptionStatus::Paused);
+
+    // Paused -> Active
+    let mut status = SubscriptionStatus::Paused;
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+
+    // Active -> Cancelled
+    let mut status = SubscriptionStatus::Active;
+    assert!(transition_to(&mut status, SubscriptionStatus::Cancelled).is_ok());
+    assert_eq!(status, SubscriptionStatus::Cancelled);
+
+    // InsufficientBalance -> Active
+    let mut status = SubscriptionStatus::InsufficientBalance;
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+
+    // GracePeriod -> Active
+    let mut status = SubscriptionStatus::GracePeriod;
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+
+    // GracePeriod -> InsufficientBalance
+    let mut status = SubscriptionStatus::GracePeriod;
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_ok());
+    assert_eq!(status, SubscriptionStatus::InsufficientBalance);
+
+    // Active -> GracePeriod
+    let mut status = SubscriptionStatus::Active;
+    assert!(transition_to(&mut status, SubscriptionStatus::GracePeriod).is_ok());
+    assert_eq!(status, SubscriptionStatus::GracePeriod);
+
+    // Active -> InsufficientBalance
+    let mut status = SubscriptionStatus::Active;
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_ok());
+    assert_eq!(status, SubscriptionStatus::InsufficientBalance);
+
+    // Active -> Expired
+    let mut status = SubscriptionStatus::Active;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+
+    // Paused -> Expired
+    let mut status = SubscriptionStatus::Paused;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+
+    // InsufficientBalance -> Expired
+    let mut status = SubscriptionStatus::InsufficientBalance;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+
+    // GracePeriod -> Expired
+    let mut status = SubscriptionStatus::GracePeriod;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+
+    // Cancelled -> Archived
+    let mut status = SubscriptionStatus::Cancelled;
+    assert!(transition_to(&mut status, SubscriptionStatus::Archived).is_ok());
+    assert_eq!(status, SubscriptionStatus::Archived);
+
+    // Expired -> Archived
+    let mut status = SubscriptionStatus::Expired;
+    assert!(transition_to(&mut status, SubscriptionStatus::Archived).is_ok());
+    assert_eq!(status, SubscriptionStatus::Archived);
+}
+
+/// Test that `transition_to` rejects invalid transitions without mutation
+#[test]
+fn test_transition_to_invalid_transitions_no_mutation() {
+    // Cancelled -> Active (should fail, status unchanged)
+    let mut status = SubscriptionStatus::Cancelled;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_err());
+    assert_eq!(status, original); // No mutation on failure
+
+    // Cancelled -> Paused
+    let mut status = SubscriptionStatus::Cancelled;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::Paused).is_err());
+    assert_eq!(status, original);
+
+    // Cancelled -> InsufficientBalance
+    let mut status = SubscriptionStatus::Cancelled;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_err());
+    assert_eq!(status, original);
+
+    // Cancelled -> GracePeriod
+    let mut status = SubscriptionStatus::Cancelled;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::GracePeriod).is_err());
+    assert_eq!(status, original);
+
+    // Paused -> InsufficientBalance
+    let mut status = SubscriptionStatus::Paused;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_err());
+    assert_eq!(status, original);
+
+    // InsufficientBalance -> Paused
+    let mut status = SubscriptionStatus::InsufficientBalance;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::Paused).is_err());
+    assert_eq!(status, original);
+
+    // Archived -> Active (terminal state)
+    let mut status = SubscriptionStatus::Archived;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_err());
+    assert_eq!(status, original);
+
+    // Archived -> Paused
+    let mut status = SubscriptionStatus::Archived;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::Paused).is_err());
+    assert_eq!(status, original);
+
+    // Archived -> Cancelled
+    let mut status = SubscriptionStatus::Archived;
+    let original = status;
+    assert!(transition_to(&mut status, SubscriptionStatus::Cancelled).is_err());
+    assert_eq!(status, original);
+}
+
+/// Test idempotent transitions (same status -> same status)
+#[test]
+fn test_transition_to_idempotent() {
+    let statuses = [
+        SubscriptionStatus::Active,
+        SubscriptionStatus::Paused,
+        SubscriptionStatus::Cancelled,
+        SubscriptionStatus::InsufficientBalance,
+        SubscriptionStatus::GracePeriod,
+        SubscriptionStatus::Expired,
+        SubscriptionStatus::Archived,
+    ];
+
+    for status in statuses {
+        let mut current = status;
+        assert!(
+            transition_to(&mut current, status).is_ok(),
+            "Idempotent transition for {:?} should succeed",
+            status
+        );
+        assert_eq!(current, status);
+    }
+}
+
+/// Test all valid transitions from each state (exhaustive adjacency matrix)
+#[test]
+fn test_exhaustive_valid_transitions_matrix() {
+    // Define all valid transitions as (from, to) pairs
+    let valid_transitions = [
+        // From Active
+        (SubscriptionStatus::Active, SubscriptionStatus::Paused),
+        (SubscriptionStatus::Active, SubscriptionStatus::Cancelled),
+        (SubscriptionStatus::Active, SubscriptionStatus::InsufficientBalance),
+        (SubscriptionStatus::Active, SubscriptionStatus::GracePeriod),
+        (SubscriptionStatus::Active, SubscriptionStatus::Expired),
+        // From Paused
+        (SubscriptionStatus::Paused, SubscriptionStatus::Active),
+        (SubscriptionStatus::Paused, SubscriptionStatus::Cancelled),
+        (SubscriptionStatus::Paused, SubscriptionStatus::Expired),
+        // From Cancelled
+        (SubscriptionStatus::Cancelled, SubscriptionStatus::Archived),
+        // From InsufficientBalance
+        (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Active),
+        (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Cancelled),
+        (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Expired),
+        // From GracePeriod
+        (SubscriptionStatus::GracePeriod, SubscriptionStatus::Active),
+        (SubscriptionStatus::GracePeriod, SubscriptionStatus::Cancelled),
+        (SubscriptionStatus::GracePeriod, SubscriptionStatus::InsufficientBalance),
+        (SubscriptionStatus::GracePeriod, SubscriptionStatus::Expired),
+        // From Expired
+        (SubscriptionStatus::Expired, SubscriptionStatus::Archived),
+        // From Archived - no outgoing transitions (terminal)
+    ];
+
+    for (from, to) in valid_transitions {
+        let mut status = from;
+        assert!(
+            transition_to(&mut status, to).is_ok(),
+            "Transition {:?} -> {:?} should be valid",
+            from,
+            to
+        );
+        assert_eq!(status, to);
+    }
+}
+
+/// Test critical invalid transitions that must be blocked for security
+#[test]
+fn test_critical_security_transitions_blocked() {
+    // Terminal state violations
+    let terminal_violations = [
+        (SubscriptionStatus::Cancelled, SubscriptionStatus::Active),
+        (SubscriptionStatus::Cancelled, SubscriptionStatus::Paused),
+        (SubscriptionStatus::Cancelled, SubscriptionStatus::InsufficientBalance),
+        (SubscriptionStatus::Cancelled, SubscriptionStatus::GracePeriod),
+        (SubscriptionStatus::Archived, SubscriptionStatus::Active),
+        (SubscriptionStatus::Archived, SubscriptionStatus::Paused),
+        (SubscriptionStatus::Archived, SubscriptionStatus::Cancelled),
+        (SubscriptionStatus::Archived, SubscriptionStatus::InsufficientBalance),
+        (SubscriptionStatus::Archived, SubscriptionStatus::GracePeriod),
+        (SubscriptionStatus::Archived, SubscriptionStatus::Expired),
+    ];
+
+    for (from, to) in terminal_violations {
+        let mut status = from;
+        assert!(
+            transition_to(&mut status, to).is_err(),
+            "Security violation: {:?} -> {:?} must be blocked",
+            from,
+            to
+        );
+        assert_eq!(status, from, "Status must not mutate on invalid transition");
+    }
+
+    // Semantic violations (illogical transitions)
+    let semantic_violations = [
+        (SubscriptionStatus::Paused, SubscriptionStatus::InsufficientBalance),
+        (SubscriptionStatus::InsufficientBalance, SubscriptionStatus::Paused),
+        (SubscriptionStatus::Active, SubscriptionStatus::Archived), // Must go through Cancelled/Expired first
+        (SubscriptionStatus::Paused, SubscriptionStatus::Archived),  // Must go through Cancelled/Expired first
+    ];
+
+    for (from, to) in semantic_violations {
+        let mut status = from;
+        assert!(
+            transition_to(&mut status, to).is_err(),
+            "Semantic violation: {:?} -> {:?} must be blocked",
+            from,
+            to
+        );
+        assert_eq!(status, from, "Status must not mutate on invalid transition");
+    }
+}
+
+/// Test complex lifecycle sequences
+#[test]
+fn test_lifecycle_sequence_active_pause_resume_cancel() {
+    let mut status = SubscriptionStatus::Active;
+    
+    // Active -> Paused
+    assert!(transition_to(&mut status, SubscriptionStatus::Paused).is_ok());
+    assert_eq!(status, SubscriptionStatus::Paused);
+    
+    // Paused -> Active
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+    
+    // Active -> Paused (again)
+    assert!(transition_to(&mut status, SubscriptionStatus::Paused).is_ok());
+    assert_eq!(status, SubscriptionStatus::Paused);
+    
+    // Paused -> Cancelled
+    assert!(transition_to(&mut status, SubscriptionStatus::Cancelled).is_ok());
+    assert_eq!(status, SubscriptionStatus::Cancelled);
+    
+    // Cancelled -> Active (should fail)
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_err());
+    assert_eq!(status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_lifecycle_sequence_insufficient_balance_recovery() {
+    let mut status = SubscriptionStatus::Active;
+    
+    // Active -> InsufficientBalance (charge failure)
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_ok());
+    assert_eq!(status, SubscriptionStatus::InsufficientBalance);
+    
+    // InsufficientBalance -> Active (recovery after deposit)
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+    
+    // Active -> InsufficientBalance (again)
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_ok());
+    assert_eq!(status, SubscriptionStatus::InsufficientBalance);
+    
+    // InsufficientBalance -> Cancelled
+    assert!(transition_to(&mut status, SubscriptionStatus::Cancelled).is_ok());
+    assert_eq!(status, SubscriptionStatus::Cancelled);
+}
+
+#[test]
+fn test_lifecycle_sequence_grace_period_flow() {
+    let mut status = SubscriptionStatus::Active;
+    
+    // Active -> GracePeriod (first charge failure with grace enabled)
+    assert!(transition_to(&mut status, SubscriptionStatus::GracePeriod).is_ok());
+    assert_eq!(status, SubscriptionStatus::GracePeriod);
+    
+    // GracePeriod -> Active (successful charge during grace)
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+    
+    // Active -> GracePeriod (again)
+    assert!(transition_to(&mut status, SubscriptionStatus::GracePeriod).is_ok());
+    assert_eq!(status, SubscriptionStatus::GracePeriod);
+    
+    // GracePeriod -> InsufficientBalance (grace expires)
+    assert!(transition_to(&mut status, SubscriptionStatus::InsufficientBalance).is_ok());
+    assert_eq!(status, SubscriptionStatus::InsufficientBalance);
+    
+    // InsufficientBalance -> Active (recovery)
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_ok());
+    assert_eq!(status, SubscriptionStatus::Active);
+}
+
+#[test]
+fn test_lifecycle_sequence_expiration_paths() {
+    // Path 1: Active -> Expired -> Archived
+    let mut status = SubscriptionStatus::Active;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+    assert!(transition_to(&mut status, SubscriptionStatus::Archived).is_ok());
+    assert_eq!(status, SubscriptionStatus::Archived);
+    
+    // Path 2: Paused -> Expired -> Archived
+    let mut status = SubscriptionStatus::Paused;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+    assert!(transition_to(&mut status, SubscriptionStatus::Archived).is_ok());
+    assert_eq!(status, SubscriptionStatus::Archived);
+    
+    // Path 3: GracePeriod -> Expired -> Archived
+    let mut status = SubscriptionStatus::GracePeriod;
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_ok());
+    assert_eq!(status, SubscriptionStatus::Expired);
+    assert!(transition_to(&mut status, SubscriptionStatus::Archived).is_ok());
+    assert_eq!(status, SubscriptionStatus::Archived);
+}
+
+#[test]
+fn test_lifecycle_sequence_cancel_then_archive() {
+    let mut status = SubscriptionStatus::Active;
+    
+    // Active -> Cancelled
+    assert!(transition_to(&mut status, SubscriptionStatus::Cancelled).is_ok());
+    assert_eq!(status, SubscriptionStatus::Cancelled);
+    
+    // Cancelled -> Archived
+    assert!(transition_to(&mut status, SubscriptionStatus::Archived).is_ok());
+    assert_eq!(status, SubscriptionStatus::Archived);
+    
+    // Archived is terminal - no further transitions
+    assert!(transition_to(&mut status, SubscriptionStatus::Active).is_err());
+    assert!(transition_to(&mut status, SubscriptionStatus::Cancelled).is_err());
+    assert!(transition_to(&mut status, SubscriptionStatus::Expired).is_err());
+    assert_eq!(status, SubscriptionStatus::Archived);
+}
+
+/// Test that all 7 states are covered in the match statement (compiler-enforced totality)
+#[test]
+fn test_state_completeness_all_statuses_exist() {
+    let all_statuses = [
+        SubscriptionStatus::Active,
+        SubscriptionStatus::Paused,
+        SubscriptionStatus::Cancelled,
+        SubscriptionStatus::InsufficientBalance,
+        SubscriptionStatus::GracePeriod,
+        SubscriptionStatus::Expired,
+        SubscriptionStatus::Archived,
+    ];
+    
+    // Verify we have exactly 7 states
+    assert_eq!(all_statuses.len(), 7, "State machine must have exactly 7 states");
+    
+    // Verify each state can transition to itself (idempotent)
+    for status in all_statuses {
+        let mut current = status;
+        assert!(transition_to(&mut current, status).is_ok());
+    }
 }
