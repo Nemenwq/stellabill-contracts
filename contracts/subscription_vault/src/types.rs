@@ -51,6 +51,8 @@ pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 /// | 23 | `Treasury` | instance |
 /// | 24 | `AcceptedTokens` | instance |
 /// | 25 | `TokenDecimals(Address)` | instance |
+/// | 37 | `AdminNonce(Address, u32)` | persistent |
+/// | 38 | `Operator` | instance |
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -149,6 +151,10 @@ pub enum DataKey {
     BillingPeriodSnapshot(u32, u64),
     /// Secondary index of period snapshot refs for a subscription.
     BillingPeriodSnapshotIndex(u32),
+    /// Monotonic nonce counter keyed by (signer, domain) for replay protection. Discriminant 37.
+    AdminNonce(Address, u32),
+    /// Optional least-privilege operator address. Discriminant 38.
+    Operator,
 }
 
 /// Accrued totals by charge kind.
@@ -922,6 +928,23 @@ pub struct AdminRotatedEvent {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct EmergencyStopDisabledEvent {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when an admin assigns an operator address.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OperatorSetEvent {
+    pub admin: Address,
+    pub operator: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when an admin removes the operator address.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OperatorRemovedEvent {
     pub admin: Address,
     pub timestamp: u64,
 }

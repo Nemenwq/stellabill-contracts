@@ -80,6 +80,7 @@ mod merchant;
 mod metadata;
 pub mod migration;
 mod nonce;
+mod operator;
 mod oracle;
 mod queries;
 mod reentrancy;
@@ -157,6 +158,7 @@ pub use types::{
     OP_CHARGE, OP_WITHDRAW, OP_REFUND, OP_BILLING_PAUSE, OP_AUTO_RENEWAL,
     DEFAULT_ALLOWED_OPS, OP_CHARGE, OP_WITHDRAW, OP_REFUND,
     GlobalCapDefaultUpdatedEvent, LifetimeCapUpdatedEvent, MerchantCapDefaultUpdatedEvent,
+    OperatorRemovedEvent, OperatorSetEvent,
     UsageChargeResult,
 };
 
@@ -305,6 +307,178 @@ impl SubscriptionVault {
     /// Read-only; no auth required.
     pub fn get_admin_nonce(env: Env, signer: Address, domain: u32) -> u64 {
         nonce::get_nonce(&env, &signer, domain)
+    }
+
+    // ── Operator management ───────────────────────────────────────────────────
+
+    /// Assign a least-privilege operator address. Admin only.
+    ///
+    /// The operator may call the `operator_*` charge endpoints but has no
+    /// access to governance, fund withdrawal, or high-risk configuration.
+    /// Replaces any previously stored operator.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` — Must match the stored admin.
+    /// * `operator` — Address to store as operator. Must not be the contract address.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the stored admin.
+    /// * [`Error::InvalidInput`] — `operator` is the contract's own address.
+    ///
+    /// # Events
+    ///
+    /// Emits [`OperatorSetEvent`] with `admin`, `operator`, and current timestamp.
+    pub fn set_operator(env: Env, admin: Address, operator: Address) -> Result<(), Error> {
+        operator::do_set_operator(&env, admin, operator)
+    }
+
+    /// Remove the operator address. Admin only.
+    ///
+    /// The operator loses all charge capabilities immediately. Calling this
+    /// when no operator is set is a no-op (returns `Ok`).
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` — Must match the stored admin.
+    ///
+    /// # Auth
+    ///
+    /// Admin only.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — Caller is not the stored admin.
+    ///
+    /// # Events
+    ///
+    /// Emits [`OperatorRemovedEvent`] with `admin` and current timestamp.
+    pub fn remove_operator(env: Env, admin: Address) -> Result<(), Error> {
+        operator::do_remove_operator(&env, admin)
+    }
+
+    /// Return the current operator address, or `None` if none is set.
+    ///
+    /// Read-only; no auth required.
+    pub fn get_operator(env: Env) -> Option<Address> {
+        operator::get_operator(&env)
+    }
+
+    /// Return the current (next-expected) operator nonce for `DOMAIN_OPERATOR_BATCH_CHARGE`.
+    ///
+    /// Off-chain callers must read this before calling [`operator_batch_charge`](Self::operator_batch_charge).
+    /// Returns `0` when no nonce has been consumed yet.
+    ///
+    /// Read-only; no auth required.
+    pub fn get_operator_nonce(env: Env, op: Address) -> u64 {
+        nonce::get_nonce(&env, &op, nonce::DOMAIN_OPERATOR_BATCH_CHARGE)
+    }
+
+    // ── Operator charge endpoints ─────────────────────────────────────────────
+
+    /// Batch charge by an operator.
+    ///
+    /// **Disabled when emergency stop is active.**
+    ///
+    /// Functionally identical to [`batch_charge`](Self::batch_charge) but
+    /// authenticated via the stored operator address instead of the admin.
+    /// Uses a separate nonce domain (`DOMAIN_OPERATOR_BATCH_CHARGE = 2`) so
+    /// captured operator nonces cannot be replayed as admin nonces.
+    ///
+    /// # Arguments
+    ///
+    /// * `operator` — Must match the stored operator address.
+    /// * `subscription_ids` — IDs to charge.
+    /// * `nonce` — Read current value with [`get_operator_nonce`](Self::get_operator_nonce).
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EmergencyStopActive`] — Emergency stop is active.
+    /// * [`Error::Unauthorized`] — Caller is not the stored operator.
+    /// * [`Error::NonceAlreadyUsed`] — Nonce does not match expected value.
+    pub fn operator_batch_charge(
+        env: Env,
+        operator: Address,
+        subscription_ids: Vec<u32>,
+        nonce: u64,
+    ) -> Result<Vec<BatchChargeResult>, Error> {
+        require_not_emergency_stop(&env)?;
+        operator::do_operator_batch_charge(&env, operator, &subscription_ids, nonce)
+    }
+
+    /// Single interval charge by an operator.
+    ///
+    /// **Disabled when emergency stop is active.**
+    ///
+    /// # Arguments
+    ///
+    /// * `operator` — Must match the stored operator address.
+    /// * `subscription_id` — Subscription to charge.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EmergencyStopActive`] — Emergency stop is active.
+    /// * [`Error::Unauthorized`] — Caller is not the stored operator.
+    pub fn operator_charge_subscription(
+        env: Env,
+        op: Address,
+        subscription_id: u32,
+    ) -> Result<ChargeExecutionResult, Error> {
+        require_not_emergency_stop(&env)?;
+
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_subscription")?;
+
+        operator::do_operator_charge_subscription(&env, op, subscription_id)
+    }
+
+    /// Metered usage charge by an operator.
+    ///
+    /// **Disabled when emergency stop is active.**
+    ///
+    /// # Arguments
+    ///
+    /// * `operator` — Must match the stored operator address.
+    /// * `subscription_id` — Subscription to charge.
+    /// * `usage_amount` — Usage units to bill.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::EmergencyStopActive`] — Emergency stop is active.
+    /// * [`Error::Unauthorized`] — Caller is not the stored operator.
+    pub fn operator_charge_usage(
+        env: Env,
+        op: Address,
+        subscription_id: u32,
+        usage_amount: i128,
+    ) -> Result<UsageChargeResult, Error> {
+        require_not_emergency_stop(&env)?;
+
+        let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_usage")?;
+
+        operator::do_operator_charge_usage(&env, op, subscription_id, usage_amount)
+    }
+
+    /// Metered usage charge with a reference string by an operator.
+    ///
+    /// **Disabled when emergency stop is active.**
+    pub fn operator_charge_usage_with_reference(
+        env: Env,
+        op: Address,
+        subscription_id: u32,
+        usage_amount: i128,
+        reference: String,
+    ) -> Result<UsageChargeResult, Error> {
+        require_not_emergency_stop(&env)?;
+
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "operator_charge_usage_with_reference")?;
+
+        operator::do_operator_charge_usage_with_reference(&env, op, subscription_id, usage_amount, reference)
     }
 
     // Updates the admin address.
