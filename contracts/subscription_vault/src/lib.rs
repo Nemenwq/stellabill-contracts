@@ -1609,6 +1609,19 @@ impl SubscriptionVault {
         merchant::get_merchant_balance_by_token(&env, &merchant, &token)
     }
 
+    /// Detailed per-token earnings record for a merchant.
+    ///
+    /// Returns the [`TokenEarnings`] struct containing accruals (broken down by
+    /// charge kind), withdrawals, and refunds. The reconciliation invariant
+    /// `balance = accruals.total - withdrawals - refunds` must hold at all times.
+    pub fn get_merchant_token_earnings(
+        env: Env,
+        merchant: Address,
+        token: Address,
+    ) -> crate::types::TokenEarnings {
+        merchant::get_merchant_token_earnings(&env, &merchant, &token)
+    }
+
     /// Check if a merchant has enabled a blanket pause.
     pub fn get_merchant_paused(env: Env, merchant: Address) -> bool {
         merchant::get_merchant_paused(&env, merchant)
