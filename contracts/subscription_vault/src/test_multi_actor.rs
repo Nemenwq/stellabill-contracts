@@ -271,7 +271,7 @@ fn test_adversarial_cancel_right_before_charge() {
     setup.env.jump(BATCH_INTERVAL + 1);
 
     let ids = vec![&setup.env.env, sub_id];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
 
     assert_eq!(results.len(), 1);
     assert_eq!(results.get(0).unwrap().success, false);
@@ -289,7 +289,7 @@ fn test_adversarial_cancel_right_after_charge() {
     setup.env.jump(BATCH_INTERVAL + 1);
 
     let ids = vec![&setup.env.env, sub_id];
-    let results = setup.env.client.batch_charge(&ids);
+    let results = setup.env.client.batch_charge(&ids, &0u64);
     assert_eq!(results.len(), 1);
     assert_eq!(results.get(0).unwrap().success, true);
 
