@@ -57,6 +57,11 @@ pub fn charge_one(
         return Err(Error::MerchantPaused);
     }
 
+    // Blocklist guard — do not charge subscriptions belonging to blocklisted subscribers
+    if crate::blocklist::is_blocklisted(env, &sub.subscriber) {
+        return Err(Error::SubscriberBlocklisted);
+    }
+
     // Expiration guard
     if sub.is_expired(now) {
         if sub.status != SubscriptionStatus::Expired {
@@ -345,6 +350,11 @@ pub fn charge_usage_one(
 
     if crate::merchant::get_merchant_paused(env, merchant.clone()) {
         return Err(Error::MerchantPaused);
+    }
+
+    // Blocklist guard — do not process usage charges for blocklisted subscribers
+    if crate::blocklist::is_blocklisted(env, &sub.subscriber) {
+        return Err(Error::SubscriberBlocklisted);
     }
 
     let now = env.ledger().timestamp();
